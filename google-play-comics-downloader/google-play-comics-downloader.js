@@ -1,7 +1,7 @@
 // Google Play Books Real-time Image Downloader - Console Ready Version
 (function () {
   'use strict';
-  
+
   // Auto-downloads images as soon as they are collected
   class ImageDownloader {
     constructor() {
@@ -12,7 +12,7 @@
       this.isPaused = false;
       this.downloadDelay = 3000; // Default 3 seconds
       this.downloadCount = 0;
-      
+
       // Auto-scroll properties
       this.scrollIntervalId = null;
       this.isAutoScrolling = false;
@@ -28,7 +28,7 @@
       const images = document.querySelectorAll("image");
       let newCount = 0;
       const newUrls = [];
-      
+
       images.forEach(img => {
         const url = img.getAttribute('xlink:href');
         if (url && url.startsWith('blob:') && !this.collectedUrls.has(url)) {
@@ -37,13 +37,13 @@
           newCount++;
         }
       });
-      
+
       if (newCount > 0) {
         console.log(`Found ${newCount} new images, total: ${this.collectedUrls.size}`);
         // Add new images to download queue
         newUrls.forEach(url => this.addToQueue(url));
       }
-      
+
       return newCount;
     }
 
@@ -64,7 +64,7 @@
       this.isDownloading = true;
       const url = this.downloadQueue.shift();
       this.downloadCount++;
-      
+
       console.log(`Starting download ${this.downloadCount}: ${this.downloadQueue.length} remaining in queue`);
       this.downloadImage(url, this.downloadCount);
     }
@@ -74,7 +74,7 @@
       const xhr = new XMLHttpRequest();
       xhr.open('GET', url, true);
       xhr.responseType = 'blob';
-      
+
       xhr.onload = () => {
         if (xhr.status === 200) {
           const blob = xhr.response;
@@ -85,24 +85,24 @@
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
-          
+
           // Clean up blob URL
           setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-          
+
           console.log(`Downloaded image ${downloadNumber}`);
         } else {
           console.error(`Failed to download image ${downloadNumber}: HTTP ${xhr.status}`);
         }
-        
+
         // Mark download as complete and process next
         this.isDownloading = false;
-        
+
         // Wait before processing next download
         setTimeout(() => {
           this.processQueue();
         }, this.downloadDelay);
       };
-      
+
       xhr.onerror = () => {
         console.error(`Network error downloading image ${downloadNumber}`);
         this.isDownloading = false;
@@ -111,7 +111,7 @@
           this.processQueue();
         }, this.downloadDelay);
       };
-      
+
       xhr.ontimeout = () => {
         console.error(`Timeout downloading image ${downloadNumber}`);
         this.isDownloading = false;
@@ -120,7 +120,7 @@
           this.processQueue();
         }, this.downloadDelay);
       };
-      
+
       xhr.timeout = 30000; // 30 second timeout
       xhr.send();
     }
@@ -159,7 +159,7 @@
       }
 
       const currentPosition = this.getScrollPosition();
-      
+
       // Check if we've reached the end
       if (this.isEndOfBook()) {
         console.log('Reached end of book, stopping auto-scroll');
@@ -201,7 +201,7 @@
       this.isAutoScrolling = true;
       this.lastScrollPosition = this.getScrollPosition();
       this.noChangeCount = 0;
-      
+
       this.scrollIntervalId = setInterval(() => this.autoScroll(), this.scrollDelay);
       console.log(`Started auto-scrolling (${this.scrollDelay}ms intervals, ${this.scrollStep}px steps)`);
     }
@@ -236,7 +236,7 @@
         console.log('Already running...');
         return;
       }
-      
+
       this.intervalId = setInterval(() => this.collectImages(), 2000);
       console.log('Started real-time collecting and downloading...');
       this.collectImages(); // Run immediately
@@ -265,7 +265,7 @@
         console.log('Download is not paused');
         return;
       }
-      
+
       this.isPaused = false;
       console.log('Download resumed');
       this.processQueue(); // Process any queued downloads
@@ -315,7 +315,7 @@
   window.setDelay = (ms) => downloader.setDownloadDelay(ms);
   window.getStatus = () => downloader.getStatus();
   window.clearAll = () => downloader.clearAll();
-  
+
   // Auto-scroll functions
   window.startAutoScroll = () => downloader.startAutoScroll();
   window.stopAutoScroll = () => downloader.stopAutoScroll();
@@ -340,4 +340,4 @@
   console.log('');
   console.log('Ready! Try: startDownload() + startAutoScroll()');
 
-})(); 
+})();
