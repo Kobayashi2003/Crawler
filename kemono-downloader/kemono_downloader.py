@@ -9,8 +9,7 @@ import os
 import re
 import sys
 import time
-import json
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple 
 from urllib.parse import urlparse, unquote
 
 import requests
@@ -56,6 +55,23 @@ HEADERS = {
 POSTS_PER_PAGE = 50
 MAX_RETRIES = 3
 RETRY_DELAY_BASE = 5  # seconds, for exponential backoff
+
+# Post folder naming configuration
+# Available variables: {id}, {title}, {published}
+# Examples:
+#   "{id}" - Just the post ID (default)
+#   "{published}_{title}" - Date and title
+#   "{published}_{id}_{title}" - Date, ID, and title
+#   "[{id}] {title}" - ID in brackets with title
+POST_FOLDER_NAME_FORMAT = "{id}"
+
+# Date format for {published} variable (uses Python strftime format)
+# Examples:
+#   "%Y-%m-%d" - 2025-01-15 (default)
+#   "%Y%m%d" - 20250115
+#   "%Y-%m-%d_%H-%M-%S" - 2025-01-15_14-30-00
+#   "%m-%d-%Y" - 01-15-2025
+PUBLISHED_DATE_FORMAT = "%Y-%m-%d"
 
 
 # ============================================================================
@@ -238,6 +254,61 @@ def get_artist_dir(name: str, service: str, user_id: str) -> str:
     safe_user_id = sanitize_folder_name(user_id)
     
     return f"{safe_name}-{safe_service}-{safe_user_id}"
+
+
+def format_post_folder_name(post_data: Dict) -> str:
+    """
+    Format post folder name based on POST_FOLDER_NAME_FORMAT configuration
+    
+    Args:
+        post_data: Post data dictionary containing 'post' key with id, title, published
+        
+    Returns:
+        Formatted folder name
+    """
+    try:
+        # Extract post information
+        post = post_data.get('post', {})
+        post_id = str(post.get('id', 'unknown'))
+        title = post.get('title', '')
+        published_str = post.get('published', '')
+        
+        # Sanitize title
+        safe_title = sanitize_filename(title) if title else 'untitled'
+        
+        # Format published date if available
+        published_formatted = ''
+        if published_str:
+            try:
+                # Parse ISO format datetime: "2025-10-03T23:36:18"
+                from datetime import datetime
+                dt = datetime.fromisoformat(published_str.replace('Z', '+00:00'))
+                published_formatted = dt.strftime(PUBLISHED_DATE_FORMAT)
+            except:
+                # If parsing fails, use the date part only
+                published_formatted = published_str.split('T')[0]
+        
+        # Format the folder name using the template
+        folder_name = POST_FOLDER_NAME_FORMAT.format(
+            id=post_id,
+            title=safe_title,
+            published=published_formatted
+        )
+        
+        # Final sanitization to ensure folder name is safe
+        folder_name = sanitize_folder_name(folder_name)
+        
+        # Fallback to post_id if formatting results in empty string
+        if not folder_name or folder_name.strip() == '':
+            folder_name = post_id
+        
+        return folder_name
+        
+    except Exception as e:
+        # If any error occurs, fallback to post_id
+        print(f"  Warning: Error formatting folder name: {e}")
+        post_id = str(post_data.get('post', {}).get('id', 'unknown'))
+        return post_id
 
 
 # ============================================================================
@@ -509,15 +580,18 @@ def download_single_post(session: KemonoSession, post_url: str):
         artist_name = profile['name']
         print(f"Artist: {artist_name}")
         
-        # Create directory
-        artist_dir = get_artist_dir(artist_name, service, user_id)
-        post_dir = os.path.join('kemono', artist_dir, 'posts', post_id)
-        
         # Get post data
         print(f"\nFetching post data...")
         post_data = fetch_post(session, service, user_id, post_id)
         post_title = post_data.get('post', {}).get('title', post_id)
         print(f"Post title: {post_title}")
+        
+        # Format post folder name
+        post_folder_name = format_post_folder_name(post_data)
+        
+        # Create directory
+        artist_dir = get_artist_dir(artist_name, service, user_id)
+        post_dir = os.path.join('kemono', artist_dir, 'posts', post_folder_name)
         
         # Download files
         print(f"\nDownloading files to: {post_dir}")
@@ -592,11 +666,13 @@ def download_all_posts(session: KemonoSession, profile_url: str):
                     post_id = post_summary['id']
                     print(f"\n[{idx}/{len(posts)}] Processing post: {post_id}")
                     
-                    post_dir = os.path.join('kemono', artist_dir, 'posts', post_id)
-                    
                     try:
                         # Get complete post data
                         post_data = fetch_post(session, service, user_id, post_id)
+                        
+                        # Format post folder name
+                        post_folder_name = format_post_folder_name(post_data)
+                        post_dir = os.path.join('kemono', artist_dir, 'posts', post_folder_name)
                         
                         # Download files
                         results = download_post_files(session, post_data, post_dir)
@@ -676,10 +752,13 @@ def download_specific_page(session: KemonoSession, profile_url: str, offset: int
             post_id = post_summary['id']
             print(f"\n[{idx}/{len(posts)}] Processing post: {post_id}")
             
-            post_dir = os.path.join('kemono', artist_dir, 'posts', post_id)
-            
             try:
                 post_data = fetch_post(session, service, user_id, post_id)
+                
+                # Format post folder name
+                post_folder_name = format_post_folder_name(post_data)
+                post_dir = os.path.join('kemono', artist_dir, 'posts', post_folder_name)
+                
                 results = download_post_files(session, post_data, post_dir)
                 print(f"  Result: {results['success']}/{results['total']} success")
                 
@@ -774,10 +853,13 @@ def download_page_range(session: KemonoSession, profile_url: str, range_str: str
                     post_id = post_summary['id']
                     print(f"\n[{idx}/{len(posts)}] Processing post: {post_id}")
                     
-                    post_dir = os.path.join('kemono', artist_dir, 'posts', post_id)
-                    
                     try:
                         post_data = fetch_post(session, service, user_id, post_id)
+                        
+                        # Format post folder name
+                        post_folder_name = format_post_folder_name(post_data)
+                        post_dir = os.path.join('kemono', artist_dir, 'posts', post_folder_name)
+                        
                         results = download_post_files(session, post_data, post_dir)
                         print(f"  Result: {results['success']}/{results['total']} success")
                         
