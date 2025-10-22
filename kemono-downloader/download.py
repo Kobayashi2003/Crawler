@@ -5,6 +5,7 @@ File Download Functions
 """
 
 import os
+import time
 from typing import Dict
 from urllib.parse import urlparse
 
@@ -12,12 +13,12 @@ from tqdm import tqdm
 
 from config import HEADERS
 from utils import (
+    SEPARATOR,
+    create_download_result,
+    extract_file_urls,
     format_file_name,
     retry_on_error,
     safe_remove_file,
-    extract_file_urls,
-    create_download_result,
-    SEPARATOR
 )
 
 
@@ -49,48 +50,135 @@ def _check_existing_file(session, url: str, save_path: str) -> bool:
 # Download Core
 # ============================================================================
 
-def _download_with_progress(response, save_path: str):
-    """Download file with progress bar"""
-    total_size = int(response.headers.get('content-length', 0))
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+def _download_with_progress(response, save_path: str, resume_pos: int = 0):
+    """Download file with progress bar, append mode if resuming"""
+    content_length = int(response.headers.get('content-length', 0))
+    total_size = content_length + resume_pos if resume_pos > 0 else content_length
     
-    with open(save_path, 'wb') as f:
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    write_mode = 'ab' if resume_pos > 0 else 'wb'
+    
+    with open(save_path, write_mode) as file:
         if total_size > 0:
-            with tqdm(total=total_size, unit='B', unit_scale=True,
-                     desc=os.path.basename(save_path)[:30]) as pbar:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        pbar.update(len(chunk))
+            _download_with_progress_bar(response, file, total_size, resume_pos, save_path)
         else:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-            print(f"✓ Download complete: {os.path.basename(save_path)}")
+            _download_without_progress_bar(response, file, save_path)
 
 
-@retry_on_error(max_retries=3, base_delay=2, exponential_backoff=True)
-def _perform_download(session, url: str, save_path: str):
-    """Perform the actual download with retry"""
-    response = session.get(url, stream=True, timeout=60)
-    response.raise_for_status()
-    _download_with_progress(response, save_path)
+def _download_with_progress_bar(response, file, total_size: int, initial_pos: int, save_path: str):
+    """Stream download with tqdm progress bar"""
+    filename = os.path.basename(save_path)[:30]
+    
+    with tqdm(total=total_size, initial=initial_pos, unit='B', 
+              unit_scale=True, desc=filename) as progress_bar:
+        for chunk in response.iter_content(chunk_size=8192):
+            if chunk:
+                file.write(chunk)
+                progress_bar.update(len(chunk))
 
 
-def download_file(session, url: str, save_path: str, max_retries: int = 3) -> bool:
-    """Download a single file with progress bar and retry mechanism"""
+def _download_without_progress_bar(response, file, save_path: str):
+    """Stream download without progress bar (unknown file size)"""
+    for chunk in response.iter_content(chunk_size=8192):
+        if chunk:
+            file.write(chunk)
+    
+    print(f"✓ Download complete: {os.path.basename(save_path)}")
+
+
+def _perform_download(session, url: str, save_path: str, resume_pos: int = 0):
+    """Execute download with resume support"""
+    headers = _prepare_download_headers(resume_pos)
+    response = session.get(url, stream=True, timeout=300, headers=headers)
+    _validate_response_status(response)
+    actual_resume_pos = _check_resume_support(response, resume_pos, save_path)
+    _download_with_progress(response, save_path, actual_resume_pos)
+
+
+def _prepare_download_headers(resume_pos: int) -> dict:
+    """Add Range header if resuming download"""
+    headers = HEADERS.copy()
+    
+    if resume_pos > 0:
+        headers['Range'] = f'bytes={resume_pos}-'
+        print(f"  Resuming from byte {resume_pos:,}")
+    
+    return headers
+
+
+def _validate_response_status(response):
+    """Ensure response status is 200 (OK) or 206 (Partial Content)"""
+    if response.status_code not in [200, 206]:
+        response.raise_for_status()
+
+
+def _check_resume_support(response, resume_pos: int, save_path: str) -> int:
+    """Return 0 if server doesn't support resume, otherwise return resume_pos"""
+    if resume_pos > 0 and response.status_code == 200:
+        print(f"  Server doesn't support resume, restarting download")
+        safe_remove_file(save_path)
+        return 0
+    
+    return resume_pos
+
+
+def download_file(session, url: str, save_path: str, max_retries: int = 5) -> bool:
+    """Download file with retry and resume support"""
     try:
         if _check_existing_file(session, url, save_path):
             return True
         
-        safe_remove_file(save_path)
-        _perform_download(session, url, save_path)
-        return True
+        return _download_with_retry(session, url, save_path, max_retries)
         
     except Exception as e:
-        print(f"✗ Download failed {os.path.basename(save_path)}: {e}")
-        safe_remove_file(save_path)
+        _handle_download_failure(save_path, e)
         return False
+
+
+def _download_with_retry(session, url: str, save_path: str, max_retries: int) -> bool:
+    """Retry download up to max_retries times with exponential backoff"""
+    for attempt in range(max_retries):
+        try:
+            resume_pos = _get_resume_position(save_path)
+            _perform_download(session, url, save_path, resume_pos)
+            return True
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                _handle_retry(e, attempt, max_retries)
+            else:
+                raise
+
+
+def _get_resume_position(save_path: str) -> int:
+    """Return file size if exists, otherwise 0"""
+    if not os.path.exists(save_path):
+        return 0
+    
+    file_size = os.path.getsize(save_path)
+    
+    if file_size > 0:
+        print(f"  Found partial file ({file_size:,} bytes)")
+    
+    return file_size
+
+
+def _handle_retry(error: Exception, attempt: int, max_retries: int):
+    """Wait with exponential backoff before retry"""
+    wait_time = 2 ** (attempt + 1)  # 2, 4, 8, 16, 32 seconds
+    
+    print(f"  ⚠ Download interrupted: {type(error).__name__}")
+    print(f"  Retrying in {wait_time}s... (attempt {attempt + 2}/{max_retries})")
+    
+    time.sleep(wait_time)
+
+
+def _handle_download_failure(save_path: str, error: Exception):
+    """Print failure message and keep partial file"""
+    filename = os.path.basename(save_path)
+    
+    print(f"✗ Download failed {filename}: {error}")
+    print(f"  Partial file kept at: {save_path}")
 
 
 # ============================================================================

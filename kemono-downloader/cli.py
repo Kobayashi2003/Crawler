@@ -4,15 +4,23 @@
 Command Line Interface
 """
 
+import os
 import sys
+import codecs
 
-from config import DEFAULT_DOWNLOAD_DIR
+from config import (
+    DEFAULT_DOWNLOAD_DIR,
+    SKIP_DOWNLOAD_ALL_CONFIRMATION,
+    SKIP_EXIT_CONFIRMATION,
+    SKIP_RETRY_CONFIRMATION,
+)
 from download import retry_failed_downloads
 from downloader import (
-    download_single_post,
     download_all_posts,
+    download_multiple_urls,
+    download_page_range,
+    download_single_post,
     download_specific_page,
-    download_page_range
 )
 from session import KemonoSession
 
@@ -30,7 +38,8 @@ def print_menu():
     print("2. Download All Posts from Profile (enter Profile URL)")
     print("3. Download Specific Page (enter Profile URL + offset)")
     print("4. Download Page Range (enter Profile URL + range)")
-    print("5. Exit")
+    print("5. Download Multiple URLs (enter file path or URLs)")
+    print("6. Exit")
     print("="*60)
 
 
@@ -67,7 +76,12 @@ def handle_retry_prompt(session, results):
         print(f"Detected {failed_count} failed download(s)")
         print(f"{'='*60}")
         
-        retry = input("Retry failed downloads? (y/n): ").strip().lower()
+        # Check if confirmation should be skipped
+        if SKIP_RETRY_CONFIRMATION:
+            print("Auto-retrying failed downloads (SKIP_RETRY_CONFIRMATION=True)...")
+            retry = 'y'
+        else:
+            retry = input("Retry failed downloads? (y/n): ").strip().lower()
         
         if retry != 'y':
             print("Skipping retry")
@@ -99,7 +113,6 @@ def _init_session():
     """Initialize session with UTF-8 encoding"""
     if sys.platform.startswith('win'):
         try:
-            import codecs
             sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
             sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
         except:
@@ -143,7 +156,13 @@ def _handle_all_posts(session):
         print("✗ URL cannot be empty")
         return
     
-    confirm = input("\nThis will download all posts from this profile. Confirm? (y/n): ").strip().lower()
+    # Check if confirmation should be skipped
+    if SKIP_DOWNLOAD_ALL_CONFIRMATION:
+        print("Proceeding to download all posts (SKIP_DOWNLOAD_ALL_CONFIRMATION=True)...")
+        confirm = 'y'
+    else:
+        confirm = input("\nThis will download all posts from this profile. Confirm? (y/n): ").strip().lower()
+    
     if confirm != 'y':
         print("Cancelled")
         return
@@ -201,6 +220,52 @@ def _handle_page_range(session):
         print(f"\n✗ Operation failed: {e}")
 
 
+def _handle_multiple_urls(session):
+    """Handle multiple URLs download"""
+    print("\nYou can either:")
+    print("  1. Enter a file path containing URLs (one URL per line)")
+    print("  2. Enter URLs directly (one per line, empty line to finish)")
+    
+    input_str = input("\nEnter file path or press Enter to input URLs: ").strip()
+    urls = []
+    
+    if input_str:
+        # Try to read from file
+        try:
+            if os.path.isfile(input_str):
+                with open(input_str, 'r', encoding='utf-8') as f:
+                    urls = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
+                print(f"✓ Loaded {len(urls)} URLs from file")
+            else:
+                print(f"✗ File not found: {input_str}")
+                return
+        except Exception as e:
+            print(f"✗ Failed to read file: {e}")
+            return
+    else:
+        # Input URLs manually
+        print("\nEnter URLs (one per line, empty line to finish):")
+        while True:
+            url = input().strip()
+            if not url:
+                break
+            urls.append(url)
+        
+        if not urls:
+            print("✗ No URLs entered")
+            return
+        
+        print(f"✓ Received {len(urls)} URLs")
+    
+    download_dir = get_download_directory()
+    
+    try:
+        results = download_multiple_urls(session, urls, download_dir)
+        handle_retry_prompt(session, results)
+    except Exception as e:
+        print(f"\n✗ Operation failed: {e}")
+
+
 def main():
     """Main entry point"""
     session = _init_session()
@@ -210,7 +275,7 @@ def main():
     while True:
         try:
             print_menu()
-            choice = input("\nSelect operation (1-5): ").strip()
+            choice = input("\nSelect operation (1-6): ").strip()
             
             if choice == '1':
                 _handle_single_post(session)
@@ -221,16 +286,25 @@ def main():
             elif choice == '4':
                 _handle_page_range(session)
             elif choice == '5':
+                _handle_multiple_urls(session)
+            elif choice == '6':
                 print("\nThank you for using Kemono Downloader!")
                 print("Goodbye!\n")
                 break
             else:
-                print("\n✗ Invalid choice, please enter 1-5")
+                print("\n✗ Invalid choice, please enter 1-6")
             
             input("\nPress Enter to continue...")
             
         except KeyboardInterrupt:
             print("\n\nInterrupt signal detected")
+            
+            # Check if confirmation should be skipped
+            if SKIP_EXIT_CONFIRMATION:
+                print("Exiting (SKIP_EXIT_CONFIRMATION=True)...")
+                print("\nGoodbye!\n")
+                break
+            
             confirm = input("Confirm exit? (y/n): ").strip().lower()
             if confirm == 'y':
                 print("\nGoodbye!\n")

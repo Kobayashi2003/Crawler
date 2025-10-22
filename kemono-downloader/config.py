@@ -51,7 +51,16 @@ MAX_RETRIES = 10
 RETRY_DELAY_BASE = 5  # seconds, for exponential backoff
 
 # Default download directory
-DEFAULT_DOWNLOAD_DIR = "kemono"
+DEFAULT_DOWNLOAD_DIR = "I:/kemono"
+
+# ============================================================================
+# User Confirmation Settings
+# ============================================================================
+
+# Skip confirmation prompts (set to True to skip, False to prompt)
+SKIP_RETRY_CONFIRMATION = True          # Skip "Retry failed downloads?" prompt
+SKIP_DOWNLOAD_ALL_CONFIRMATION = True   # Skip "Download all posts?" confirmation
+SKIP_EXIT_CONFIRMATION = False          # Skip "Confirm exit?" prompt
 
 # ============================================================================
 # Naming Configuration
@@ -59,7 +68,7 @@ DEFAULT_DOWNLOAD_DIR = "kemono"
 
 # Date format for time variables (uses Python strftime format)
 # Applies to: {published}, {indexed}, {updated}
-DATE_FORMAT = "%Y-%m-%d"
+DATE_FORMAT = "%Y.%m.%d"
 
 # Artist folder naming configuration
 # Available variables: {id}, {name}, {service}, {indexed}, {updated}, {public_id}
@@ -67,8 +76,8 @@ ARTIST_FOLDER_NAME_FORMAT = "{name}"
 
 # Post folder naming configuration
 # Available variables: {id}, {title}, {published}
-POST_FOLDER_NAME_FORMAT = "{published}-{title}"
+POST_FOLDER_NAME_FORMAT = "[{published}] {title}"
 
 # File naming configuration
 # Available variables: {idx}, {name}
-FILE_NAME_FORMAT = "{idx}"
+FILE_NAME_FORMAT = "{name}"

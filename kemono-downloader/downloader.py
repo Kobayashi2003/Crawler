@@ -8,19 +8,19 @@ import os
 import time
 from typing import Dict, Tuple
 
-from api import fetch_user_profile, fetch_post, fetch_posts_page
-from config import POSTS_PER_PAGE, DEFAULT_DOWNLOAD_DIR
+from api import fetch_post, fetch_posts_page, fetch_user_profile
+from config import DEFAULT_DOWNLOAD_DIR, POSTS_PER_PAGE
 from download import download_post_files, retry_failed_downloads
 from filter import should_download_post
 from utils import (
-    parse_post_url,
-    parse_profile_url,
+    SEPARATOR,
+    SUB_SEPARATOR,
+    create_download_result,
     format_artist_folder_name,
     format_post_folder_name,
-    create_download_result,
+    parse_post_url,
+    parse_profile_url,
     print_separator,
-    SEPARATOR,
-    SUB_SEPARATOR
 )
 
 
@@ -324,3 +324,72 @@ def download_page_range(session, profile_url: str, range_str: str, download_dir:
     except Exception as e:
         print(f"\n✗ Error: {e}")
         raise
+
+
+def download_multiple_urls(session, urls: list, download_dir: str = None):
+    """Download multiple post URLs"""
+    download_dir = download_dir or DEFAULT_DOWNLOAD_DIR
+    
+    print(f"\n{SEPARATOR}")
+    print(f"Download Multiple URLs")
+    print(SEPARATOR)
+    print(f"Total URLs: {len(urls)}")
+    print(f"Download directory: {download_dir}")
+    
+    stats = {'success': 0, 'failed': 0, 'failed_items': []}
+    processed_posts = set()
+    
+    for idx, url in enumerate(urls, 1):
+        print(f"\n{SUB_SEPARATOR}")
+        print(f"[{idx}/{len(urls)}] Processing URL: {url}")
+        print(SUB_SEPARATOR)
+        
+        try:
+            service, user_id, post_id = parse_post_url(url)
+            
+            # Skip duplicate posts
+            post_key = f"{service}_{user_id}_{post_id}"
+            if post_key in processed_posts:
+                print("  ⊘ Skipped: duplicate URL")
+                continue
+            processed_posts.add(post_key)
+            
+            print(f"Service: {service}, User ID: {user_id}, Post ID: {post_id}")
+            
+            # Fetch user profile
+            profile = fetch_user_profile(session, service, user_id)
+            print(f"Artist: {profile['name']}")
+            
+            # Fetch and process post
+            post_data = fetch_post(session, service, user_id, post_id)
+            post_title = post_data.get('post', {}).get('title', post_id)
+            print(f"Post title: {post_title}")
+            
+            if not should_download_post(post_data):
+                print(f"  ⊘ Skipped by filter: {post_title}")
+                continue
+            
+            artist_dir = _get_artist_directory(profile, service, user_id)
+            post_folder_name = format_post_folder_name(post_data)
+            post_dir = os.path.join(download_dir, artist_dir, post_folder_name)
+            
+            print(f"Downloading to: {post_dir}")
+            results = download_post_files(session, post_data, post_dir)
+            
+            stats['success'] += results['success']
+            stats['failed'] += len(results['failed'])
+            stats['failed_items'].extend(results['failed'])
+            
+            print(f"Result: {results['success']}/{results['total']} success")
+            
+        except ValueError as e:
+            print(f"  ✗ Invalid URL: {e}")
+        except Exception as e:
+            print(f"  ✗ Failed to process URL: {e}")
+        
+        time.sleep(0.5)
+    
+    _print_summary("Batch download complete!", stats['success'], stats['failed'])
+    return {'total': stats['success'] + stats['failed'],
+            'success': stats['success'],
+            'failed': stats['failed_items']}

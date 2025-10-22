@@ -8,19 +8,19 @@ import os
 import re
 import time
 from datetime import datetime
-from typing import Tuple, Callable, Any
 from functools import wraps
-from urllib.parse import urlparse, unquote
+from typing import Any, Callable, Tuple
+from urllib.parse import unquote, urlparse
 
 import requests
 
 from config import (
     ARTIST_FOLDER_NAME_FORMAT,
-    POST_FOLDER_NAME_FORMAT,
     DATE_FORMAT,
     FILE_NAME_FORMAT,
     MAX_RETRIES,
-    RETRY_DELAY_BASE
+    POST_FOLDER_NAME_FORMAT,
+    RETRY_DELAY_BASE,
 )
 
 
@@ -127,18 +127,21 @@ def sanitize_filename(filename: str, max_bytes: int = 50) -> str:
     except:
         pass
     
-    sanitized = re.sub(r'[<>:"/\\|?*.]', '_', filename)
-    sanitized = re.sub(r'[_\s]+', '_', sanitized).strip('_ ')
+    # sanitized = re.sub(r'[<>:"/\\|?*.]', '_', filename)
+    # sanitized = re.sub(r'[_\s]+', '_', sanitized).strip('_ ')
     
-    while sanitized and len(sanitized.encode('utf-8')) > max_bytes:
-        sanitized = sanitized[:-1]
+    # while sanitized and len(sanitized.encode('utf-8')) > max_bytes:
+    #     sanitized = sanitized[:-1]
     
-    return sanitized or "unknown"
+    # return sanitized or "unknown"
+
+    return filename or "unknown"
 
 
 def sanitize_folder_name(name: str) -> str:
     """Sanitize folder name by replacing path separators"""
-    return name.replace('/', '_').replace('\\', '_') if name else "unknown"
+    # return name.replace('/', '_').replace('\\', '_') if name else "unknown"
+    return name if name else "unknown"
 
 
 def _format_date(date_str: str) -> str:

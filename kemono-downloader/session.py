@@ -6,7 +6,7 @@ Session Management
 
 import requests
 
-from config import BASE_SERVER, INIT_HEADERS, HEADERS
+from config import BASE_SERVER, HEADERS, INIT_HEADERS
 
 
 class KemonoSession:
