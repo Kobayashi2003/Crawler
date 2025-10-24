@@ -16,10 +16,13 @@ import requests
 
 from config import (
     ARTIST_FOLDER_NAME_FORMAT,
+    CHAR_REPLACEMENT_MAP,
     DATE_FORMAT,
     FILE_NAME_FORMAT,
+    IMAGE_EXTENSIONS,
     MAX_RETRIES,
     POST_FOLDER_NAME_FORMAT,
+    RENAME_IMAGES_ONLY,
     RETRY_DELAY_BASE,
 )
 
@@ -117,8 +120,21 @@ def parse_profile_url(url: str) -> Tuple[str, str]:
 # String Sanitization
 # ============================================================================
 
+def _apply_char_replacement(text: str) -> str:
+    """Apply character replacement based on CHAR_REPLACEMENT_MAP"""
+    if not text:
+        return text
+    
+    result = text
+    for char, replacement in CHAR_REPLACEMENT_MAP.items():
+        if replacement is not None:
+            result = result.replace(char, replacement)
+    
+    return result
+
+
 def sanitize_filename(filename: str, max_bytes: int = 50) -> str:
-    """Sanitize filename by removing illegal characters and limiting length"""
+    """Sanitize filename by replacing illegal characters"""
     if not filename:
         return "unknown"
     
@@ -127,21 +143,16 @@ def sanitize_filename(filename: str, max_bytes: int = 50) -> str:
     except:
         pass
     
-    # sanitized = re.sub(r'[<>:"/\\|?*.]', '_', filename)
-    # sanitized = re.sub(r'[_\s]+', '_', sanitized).strip('_ ')
-    
-    # while sanitized and len(sanitized.encode('utf-8')) > max_bytes:
-    #     sanitized = sanitized[:-1]
-    
-    # return sanitized or "unknown"
-
-    return filename or "unknown"
+    sanitized = _apply_char_replacement(filename)
+    return sanitized or "unknown"
 
 
 def sanitize_folder_name(name: str) -> str:
-    """Sanitize folder name by replacing path separators"""
-    # return name.replace('/', '_').replace('\\', '_') if name else "unknown"
-    return name if name else "unknown"
+    """Sanitize folder name by replacing illegal characters"""
+    if not name:
+        return "unknown"
+    
+    return _apply_char_replacement(name)
 
 
 def _format_date(date_str: str) -> str:
@@ -211,6 +222,12 @@ def format_file_name(name: str, idx: int) -> str:
     """Format file name based on configuration"""
     try:
         base, ext = os.path.splitext(name) if name else ('', '')
+        
+        # Check if we should rename this file
+        if RENAME_IMAGES_ONLY and ext.lower() not in IMAGE_EXTENSIONS:
+            # Keep original name for non-image files
+            return name if name else str(idx)
+        
         safe_base = sanitize_filename(base) if base else str(idx)
         
         formatted = FILE_NAME_FORMAT.format(idx=idx, name=safe_base)

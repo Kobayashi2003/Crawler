@@ -326,12 +326,12 @@ def download_page_range(session, profile_url: str, range_str: str, download_dir:
         raise
 
 
-def download_multiple_urls(session, urls: list, download_dir: str = None):
+def download_multiple_posts(session, urls: list, download_dir: str = None):
     """Download multiple post URLs"""
     download_dir = download_dir or DEFAULT_DOWNLOAD_DIR
     
     print(f"\n{SEPARATOR}")
-    print(f"Download Multiple URLs")
+    print(f"Download Multiple Posts")
     print(SEPARATOR)
     print(f"Total URLs: {len(urls)}")
     print(f"Download directory: {download_dir}")

@@ -80,4 +80,36 @@ POST_FOLDER_NAME_FORMAT = "[{published}] {title}"
 
 # File naming configuration
 # Available variables: {idx}, {name}
-FILE_NAME_FORMAT = "{name}"
+FILE_NAME_FORMAT = "{idx}"
+
+# Rename only image files (set to True to rename only images, False to rename all files)
+RENAME_IMAGES_ONLY = True 
+
+# Image file extensions to be renamed (only used when RENAME_IMAGES_ONLY is True)
+IMAGE_EXTENSIONS = {'.jpe', '.jpg', '.jpeg', '.png', '.gif', '.webp'}
+
+# ============================================================================
+# Character Replacement Configuration
+# ============================================================================
+
+# Character replacement map for sanitizing file/folder names
+# Key: character to replace, Value: replacement character
+# If value is None, the character will not be replaced
+CHAR_REPLACEMENT_MAP = {
+    '/': '／',      # Full-width solidus
+    '\\': '＼',     # Full-width reverse solidus
+    ':': '：',      # Full-width colon
+    '*': '＊',      # Full-width asterisk
+    '?': '？',      # Full-width question mark
+    '"': '＂',      # Full-width quotation mark
+    '<': '＜',      # Full-width less-than sign
+    '>': '＞',      # Full-width greater-than sign
+    '|': '｜',      # Full-width vertical line
+}
+
+# ============================================================================
+# Content Saving Configuration
+# ============================================================================
+
+# Save post substring to content.txt file
+SAVE_SUBSTRING_TO_FILE = True

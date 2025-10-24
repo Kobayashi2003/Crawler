@@ -17,7 +17,7 @@ from config import (
 from download import retry_failed_downloads
 from downloader import (
     download_all_posts,
-    download_multiple_urls,
+    download_multiple_posts,
     download_page_range,
     download_single_post,
     download_specific_page,
@@ -35,10 +35,10 @@ def print_menu():
     print(" "*20 + "Kemono Downloader")
     print("="*60)
     print("1. Download Single Post (enter Post URL)")
-    print("2. Download All Posts from Profile (enter Profile URL)")
-    print("3. Download Specific Page (enter Profile URL + offset)")
-    print("4. Download Page Range (enter Profile URL + range)")
-    print("5. Download Multiple URLs (enter file path or URLs)")
+    print("2. Download Multiple Posts (enter file path or URLs)")
+    print("3. Download All Posts from Profile (enter Profile URL)")
+    print("4. Download Specific Page (enter Profile URL + offset)")
+    print("5. Download Page Range (enter Profile URL + range)")
     print("6. Exit")
     print("="*60)
 
@@ -220,8 +220,8 @@ def _handle_page_range(session):
         print(f"\n✗ Operation failed: {e}")
 
 
-def _handle_multiple_urls(session):
-    """Handle multiple URLs download"""
+def _handle_multiple_posts(session):
+    """Handle multiple posts download"""
     print("\nYou can either:")
     print("  1. Enter a file path containing URLs (one URL per line)")
     print("  2. Enter URLs directly (one per line, empty line to finish)")
@@ -260,7 +260,7 @@ def _handle_multiple_urls(session):
     download_dir = get_download_directory()
     
     try:
-        results = download_multiple_urls(session, urls, download_dir)
+        results = download_multiple_posts(session, urls, download_dir)
         handle_retry_prompt(session, results)
     except Exception as e:
         print(f"\n✗ Operation failed: {e}")
@@ -280,13 +280,13 @@ def main():
             if choice == '1':
                 _handle_single_post(session)
             elif choice == '2':
-                _handle_all_posts(session)
+                _handle_multiple_posts(session)
             elif choice == '3':
-                _handle_specific_page(session)
+                _handle_all_posts(session)
             elif choice == '4':
-                _handle_page_range(session)
+                _handle_specific_page(session)
             elif choice == '5':
-                _handle_multiple_urls(session)
+                _handle_page_range(session)
             elif choice == '6':
                 print("\nThank you for using Kemono Downloader!")
                 print("Goodbye!\n")

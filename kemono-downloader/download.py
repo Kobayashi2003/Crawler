@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from tqdm import tqdm
 
-from config import HEADERS
+from config import HEADERS, SAVE_SUBSTRING_TO_FILE
 from utils import (
     SEPARATOR,
     create_download_result,
@@ -185,9 +185,33 @@ def _handle_download_failure(save_path: str, error: Exception):
 # Batch Operations
 # ============================================================================
 
+def _save_content_to_file(post_data: Dict, save_dir: str):
+    """Save post content to content.txt if enabled
+    """
+    if not SAVE_SUBSTRING_TO_FILE:
+        return
+    
+    post = post_data.get('post', {})
+    content = post.get('content', '').strip()
+    
+    if not content:
+        return
+    
+    try:
+        content_file = os.path.join(save_dir, 'content.txt')
+        with open(content_file, 'w', encoding='utf-8') as f:
+            f.write(content)
+        print(f"  ✓ Saved content to content.txt")
+    except Exception as e:
+        print(f"  ⚠ Failed to save content: {e}")
+
+
 def download_post_files(session, post_data: Dict, save_dir: str) -> Dict:
     """Download all files from a post"""
     os.makedirs(save_dir, exist_ok=True)
+    
+    # Save substring to content.txt if enabled
+    _save_content_to_file(post_data, save_dir)
     
     files_to_download = extract_file_urls(post_data)
     
@@ -197,7 +221,7 @@ def download_post_files(session, post_data: Dict, save_dir: str) -> Dict:
     
     results = create_download_result(total=len(files_to_download))
     
-    for idx, (name, url) in enumerate(files_to_download, 1):
+    for idx, (name, url) in enumerate(files_to_download):
         if not name:
             url_ext = os.path.splitext(urlparse(url).path)[1]
             name = f"file{url_ext}" if url_ext else "file"

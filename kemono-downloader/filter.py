@@ -220,7 +220,7 @@ def should_download_post(post_data: Dict) -> bool:
     # Example 10: Complex conditions - Posts with files but not "WIP"
     return has_any_files(post_data) and not_contains_keyword(post_data, "WIP")
     """
-    
+
     # Default: Download all posts
     return True
     
