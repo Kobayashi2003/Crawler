@@ -1,0 +1,32 @@
+{
+  "download_dir": "I:/kemono",
+  "date_format": "%Y.%m.%d",
+  "artist_folder_format": "{name}",
+  "post_folder_format": "[{published}] {title}",
+  "file_name_format": "{idx}",
+  "rename_images_only": true,
+  "image_extensions": [
+    ".jpe",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp"
+  ],
+  "char_replacement": {
+    "/": "／",
+    "\\": "＼",
+    ":": "：",
+    "*": "＊",
+    "?": "？",
+    "\"": "＂",
+    "<": "＜",
+    ">": "＞",
+    "|": "｜"
+  },
+  "save_content_to_file": true,
+  "global_timer": {
+    "type": "daily",
+    "time": "02:00"
+  }
+}
