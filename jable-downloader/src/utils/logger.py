@@ -40,13 +40,19 @@ class Logger:
             'detail': detail,
         })
 
+    def get_failed(self):
+        return [r for r in self.results if r['status'] == self.STATUS_FAIL]
+
+    def clear_failed(self):
+        self.results = [r for r in self.results if r['status'] != self.STATUS_FAIL]
+
     def print_summary(self):
         if not self.results:
             return
 
         ok = [r for r in self.results if r['status'] == self.STATUS_OK]
         skipped = [r for r in self.results if r['status'] == self.STATUS_SKIP]
-        failed = [r for r in self.results if r['status'] == self.STATUS_FAIL]
+        failed = self.get_failed()
 
         print(f'\n{"=" * 60}')
         print(f'  Summary: {len(ok)} done, {len(skipped)} skipped, {len(failed)} failed'

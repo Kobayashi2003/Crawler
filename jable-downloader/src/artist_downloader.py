@@ -226,7 +226,23 @@ def main():
 
     log.print_summary()
 
-    print(f'\nAll downloads completed. ({total} video(s))')
+    # Retry loop for failed downloads
+    while log.get_failed():
+        failed = log.get_failed()
+        print()
+        retry = input(f'{len(failed)} video(s) failed. Retry? [y/N]: ').strip().lower()
+        if retry != 'y':
+            break
+
+        failed_ids = {r['video_id'] for r in failed}
+        retry_videos = [v for v in videos if extract_video_id(v['url']) in failed_ids]
+        log.clear_failed()
+
+        retry_total = len(retry_videos)
+        for i, v in enumerate(retry_videos, 1):
+            _download_one(i, retry_total, v, folder_path, template, artist_name, log)
+
+        log.print_summary()
 
 
 if __name__ == '__main__':
