@@ -23,7 +23,8 @@ def main():
 
 
 def download_videos():
-    from src.downloader import isJableVideoUrl, downloadVideo
+    from src.downloader import downloadVideo
+    from src.utils import isJableVideoUrl
 
     urls_input = input('Enter video URL(s) (space-separated): ').strip().split()
     if not urls_input:
@@ -46,8 +47,7 @@ def download_videos():
 
 def download_model():
     from src.model_downloader import main as model_main
-    # Replace sys.argv so argparse in model_main picks up the right args
-    import argparse
+    from src.config import get_last_template
 
     url = input('Enter model page URL: ').strip()
     if not url:
@@ -56,6 +56,8 @@ def download_model():
 
     folder_path = input('Output folder (press Enter for current directory): ').strip()
     sort_order = input('Sort order (best/latest/views/favorites, press Enter to skip): ').strip()
+    last_template = get_last_template()
+    template = input(f'Naming template ({{video_id}}, {{title}}, {{actress}}, default: {last_template}): ').strip()
     limit = input('Max videos to download (press Enter for all): ').strip()
     no_confirm = input('Skip confirmation? [y/N]: ').strip().lower() == 'y'
 
@@ -64,6 +66,8 @@ def download_model():
         argv.extend(['-p', folder_path])
     if sort_order:
         argv.extend(['--sort', sort_order])
+    if template:
+        argv.extend(['--template', template])
     if limit:
         argv.extend(['--limit', limit])
     if no_confirm:

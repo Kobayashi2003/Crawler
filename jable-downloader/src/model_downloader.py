@@ -7,11 +7,12 @@ import time
 import argparse
 
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
 from .downloader import downloadVideo
+from .browser import create_driver
+from .utils import sanitize_filename, is_model_url
+from .config import get_last_template, save_template
 
 SORT_MAP = {
     'best': '近期最佳',
@@ -21,38 +22,27 @@ SORT_MAP = {
 }
 
 
-def create_driver():
-    options = Options()
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-extensions')
-    options.add_argument('--headless')
-    options.add_argument(
-        'user-agent=Mozilla/5.0 (Windows NT 6.1; Win64; x64) '
-        'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.125 Safari/537.36'
-    )
-    return webdriver.Chrome(options=options)
-
-
-def is_model_url(url):
-    return bool(re.match(r'https?://jable\.tv/models/[^/]+/?$', url))
-
-
 def parse_videos_from_html(html):
     soup = BeautifulSoup(html, 'html.parser')
     videos = []
     seen = set()
 
-    for a in soup.select('a[href*="/videos/"]'):
-        href = a.get('href', '')
+    for card in soup.select('.video-img-box'):
+        link = card.select_one('h6.title a')
+        if not link:
+            link = card.select_one('a[href*="/videos/"]')
+        if not link:
+            continue
+
+        href = link.get('href', '')
         if not re.match(r'https?://jable\.tv/videos/[^/]+/', href):
             continue
         if href in seen:
             continue
         seen.add(href)
 
-        h6 = a.find('h6')
-        title = h6.get_text(strip=True) if h6 else href.rstrip('/').split('/')[-1]
+        title_tag = card.select_one('h6.title a')
+        title = title_tag.get_text(strip=True) if title_tag else href.rstrip('/').split('/')[-1]
         videos.append({'title': title, 'url': href})
 
     return videos
@@ -73,19 +63,36 @@ def apply_sort(driver, sort_key):
     sort_text = SORT_MAP.get(sort_key)
     if not sort_text:
         return
+
     try:
         tabs = driver.find_elements(By.LINK_TEXT, sort_text)
-        if tabs:
-            tabs[0].click()
-            time.sleep(2)
-        else:
-            all_links = driver.find_elements(By.TAG_NAME, 'a')
-            for link in all_links:
-                if sort_text in link.text:
-                    link.click()
-                    time.sleep(2)
-                    return
+        if not tabs:
             print(f'Warning: Sort tab "{sort_text}" not found.')
+            return
+
+        # Check if this tab is already active
+        parent = tabs[0].find_element(By.XPATH, '..')
+        if 'active' in (parent.get_attribute('class') or ''):
+            return
+
+        # Capture first video before click to detect content change
+        soup_before = BeautifulSoup(driver.page_source, 'html.parser')
+        first_el = soup_before.select_one('.video-img-box h6.title a')
+        old_title = first_el.get_text(strip=True) if first_el else None
+
+        # Use JS click for reliability in headless mode
+        driver.execute_script('arguments[0].click();', tabs[0])
+
+        # Wait for content to refresh (up to 10 seconds)
+        for _ in range(20):
+            time.sleep(0.5)
+            soup_after = BeautifulSoup(driver.page_source, 'html.parser')
+            first_after = soup_after.select_one('.video-img-box h6.title a')
+            new_title = first_after.get_text(strip=True) if first_after else None
+            if new_title and new_title != old_title:
+                break
+        else:
+            time.sleep(2)
     except Exception as e:
         print(f'Warning: Could not apply sort "{sort_text}": {e}')
 
@@ -93,37 +100,54 @@ def apply_sort(driver, sort_key):
 def collect_all_videos(url, sort_by=None, limit=None):
     driver = create_driver()
     all_videos = []
+    actress_name = url.rstrip('/').split('/')[-1]
 
     try:
         url = url.rstrip('/') + '/'
         driver.get(url)
         time.sleep(3)
 
+        # Extract actress display name from page
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        h2 = soup.select_one('h2')
+        if h2:
+            name = h2.get_text(strip=True)
+            if name:
+                actress_name = name
+
         if sort_by:
             apply_sort(driver, sort_by)
 
+        # Read total pages AFTER sort is applied
         total_pages = get_total_pages(driver.page_source)
         print(f'Found {total_pages} page(s)')
 
-        for page in range(1, total_pages + 1):
-            if page > 1:
+        # Collect page 1 (already loaded and sorted)
+        videos = parse_videos_from_html(driver.page_source)
+        all_videos.extend(videos)
+        print(f'  Page 1: {len(videos)} video(s)')
+
+        if limit and len(all_videos) >= limit:
+            all_videos = all_videos[:limit]
+        else:
+            for page in range(2, total_pages + 1):
                 page_url = f'{url}{page}/'
                 driver.get(page_url)
-                time.sleep(2)
+                time.sleep(3)
                 if sort_by:
                     apply_sort(driver, sort_by)
 
-            videos = parse_videos_from_html(driver.page_source)
-            all_videos.extend(videos)
-            print(f'  Page {page}: {len(videos)} video(s)')
+                videos = parse_videos_from_html(driver.page_source)
+                all_videos.extend(videos)
+                print(f'  Page {page}: {len(videos)} video(s)')
 
-            if limit and len(all_videos) >= limit:
-                all_videos = all_videos[:limit]
-                break
+                if limit and len(all_videos) >= limit:
+                    all_videos = all_videos[:limit]
+                    break
     finally:
         driver.quit()
 
-    return all_videos
+    return all_videos, actress_name
 
 
 def main():
@@ -137,6 +161,8 @@ def main():
         help='Sort order: best, latest, views, favorites'
     )
     parser.add_argument('--limit', type=int, default=None, help='Maximum number of videos to download')
+    parser.add_argument('--template', default=None,
+                        help='Naming template. Variables: {video_id}, {title}, {actress}')
     parser.add_argument('--no-confirm', action='store_true', help='Skip confirmation prompt')
 
     args = parser.parse_args()
@@ -145,6 +171,10 @@ def main():
         print(f'Invalid Jable model URL: {args.url}')
         sys.exit(1)
 
+    # Use saved template if not specified
+    template = args.template or get_last_template()
+    save_template(template)
+
     folder_path = args.path or os.getcwd()
 
     print(f'Collecting videos from: {args.url}')
@@ -152,9 +182,10 @@ def main():
         print(f'Sort order: {SORT_MAP[args.sort]}')
     if args.limit:
         print(f'Limit: {args.limit} video(s)')
+    print(f'Template: {template}')
     print()
 
-    videos = collect_all_videos(args.url, sort_by=args.sort, limit=args.limit)
+    videos, actress_name = collect_all_videos(args.url, sort_by=args.sort, limit=args.limit)
 
     if not videos:
         print('No videos found.')
@@ -175,9 +206,15 @@ def main():
             sys.exit(0)
 
     for i, v in enumerate(videos, 1):
+        video_id = v['url'].rstrip('/').split('/')[-1]
+        folder_name = template.replace('{video_id}', video_id)
+        folder_name = folder_name.replace('{title}', v['title'])
+        folder_name = folder_name.replace('{actress}', actress_name)
+        folder_name = sanitize_filename(folder_name)
+
         print(f'\n[{i}/{len(videos)}] {v["title"]}')
         try:
-            downloadVideo(v['url'], folder_path)
+            downloadVideo(v['url'], folder_path, folder_name=folder_name)
             print('  Done.')
         except Exception as e:
             print(f'  Error: {e}')
