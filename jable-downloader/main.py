@@ -23,8 +23,8 @@ def main():
 
 
 def download_videos():
-    from src.base_downloader import downloadVideo
-    from src.utils.helpers import isJableVideoUrl
+    from src.video_downloader import download_video
+    from src.utils.helpers import is_video_url
 
     urls_input = input('Enter video URL(s) (space-separated): ').strip().split()
     if not urls_input:
@@ -38,11 +38,11 @@ def download_videos():
         os.makedirs(folder_path)
 
     for url in urls_input:
-        if not isJableVideoUrl(url):
+        if not is_video_url(url):
             print(f'Invalid jable video URL: {url}')
             continue
         print(f'\nDownloading: {url}')
-        downloadVideo(url, folder_path)
+        download_video(url, folder_path)
 
 
 def download_artist():
@@ -59,7 +59,6 @@ def download_artist():
     last_template = get_last_template()
     template = input(f'Naming template ({{video_id}}, {{title}}, {{artist}}, default: {last_template}): ').strip()
     limit = input('Max videos to download (press Enter for all): ').strip()
-    workers = input('Concurrent downloads (press Enter for 1): ').strip()
     no_confirm = input('Skip confirmation? [y/N]: ').strip().lower() == 'y'
 
     argv = [url]
@@ -71,8 +70,6 @@ def download_artist():
         argv.extend(['--template', template])
     if limit:
         argv.extend(['--limit', limit])
-    if workers:
-        argv.extend(['-w', workers])
     if no_confirm:
         argv.append('--no-confirm')
 

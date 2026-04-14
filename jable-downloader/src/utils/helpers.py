@@ -7,12 +7,13 @@ def sanitize_filename(name):
     return name if name else '_'
 
 
-def isJableVideoUrl(url):
-    if re.match(r'.*jable.tv/videos/.*/', url):
-        return True
-    else:
-        return False
+def is_video_url(url):
+    return bool(re.match(r'https?://jable\.tv/videos/[^/]+/?$', url))
 
 
 def is_artist_url(url):
     return bool(re.match(r'https?://jable\.tv/models/[^/]+/?$', url))
+
+
+def extract_video_id(url):
+    return url.rstrip('/').split('/')[-1]

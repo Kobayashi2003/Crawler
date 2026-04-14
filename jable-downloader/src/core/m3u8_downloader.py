@@ -1,109 +1,121 @@
 import os
 import re
-import copy
+import threading
 import tqdm
 
-from functools import partial
-from concurrent import futures
+from concurrent.futures import ThreadPoolExecutor
 
 import m3u8
-import requests
-import urllib.request
 from Crypto.Cipher import AES
 
-from ..utils.config import USER_AGENT
-from .browser import create_driver
+from ..utils.config import create_session
+
+MAX_WORKERS = 32
+MAX_RETRIES = 5
+TS_TIMEOUT = 30
 
 
-def downloadM3U8(url, folderPath):
-    driver = create_driver()
-    driver.get(url=url)
+def parse_m3u8(page_source):
+    urls = re.findall(r"https://[^\s\"']+\.m3u8", page_source)
+    return urls[0] if urls else None
 
-    m3u8urls = re.findall("https://.+m3u8", driver.page_source)
-    m3u8url = m3u8urls[0]
-    driver.quit()
 
-    if not os.path.exists(folderPath):
-        os.makedirs(folderPath)
-    m3u8file = os.path.join(folderPath, f'{url.split("/")[-2]}.m3u8')
-    urllib.request.urlretrieve(m3u8url, m3u8file)
+def fetch_m3u8(m3u8_url, folder_path, video_id, session=None):
+    _session = session or create_session()
 
-    m3u8obj = m3u8.load(m3u8file)
-    downloadUrl = '/'.join(m3u8url.split('/')[:-1])
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+    m3u8_file = os.path.join(folder_path, f'{video_id}.m3u8')
 
-    m3u8uri = ''
-    m3u8iv = ''
-    for key in m3u8obj.keys:
+    resp = _session.get(m3u8_url, timeout=30)
+    resp.raise_for_status()
+    with open(m3u8_file, 'wb') as f:
+        f.write(resp.content)
+
+    m3u8_obj = m3u8.load(m3u8_file)
+    base_url = '/'.join(m3u8_url.split('/')[:-1])
+
+    cipher = None
+    for key in m3u8_obj.keys:
         if key:
-            m3u8uri = key.uri
-            m3u8iv = key.iv
+            key_url = base_url + '/' + key.uri
+            key_data = _session.get(key_url, timeout=30).content
+            iv = key.iv.replace("0x", "")[:16].encode()
+            cipher = AES.new(key_data, AES.MODE_CBC, iv)
+            break
 
-    if m3u8uri:
-        m3u8keyUrl = downloadUrl + '/' + m3u8uri
-        m3u8key = requests.get(m3u8keyUrl, headers={
-            'User-Agent': USER_AGENT,
-        }, timeout=10).content
-        iv = m3u8iv.replace("0x", "")[:16].encode()
-        ci = AES.new(m3u8key, AES.MODE_CBC, iv)
-    else:
-        ci = ''
+    ts_urls = [base_url + '/' + seg.uri for seg in m3u8_obj.segments]
 
-    tsUrls = []
-    for seg in m3u8obj.segments:
-        tsUrls.append(downloadUrl + '/' + seg.uri)
+    os.remove(m3u8_file)
+    if not os.listdir(folder_path):
+        os.rmdir(folder_path)
 
-    os.remove(m3u8file)
-    if not os.listdir(folderPath):
-        os.rmdir(folderPath)
-
-    return tsUrls, ci
+    return ts_urls, cipher
 
 
-def downloadTS(pbar, downloadList, ci, folderPath, tsUrl):
-    fileName = tsUrl.split('/')[-1][0:-3]
-    saveName = os.path.join(folderPath, fileName + ".ts")
-    if os.path.exists(saveName):
-        downloadList.remove(tsUrl)
-        pbar.update(1)
-    else:
-        response = requests.get(tsUrl, headers={
-            'User-Agent': USER_AGENT,
-        }, timeout=10)
-        if response.status_code == 200:
-            content_ts = response.content
-            if ci:
-                content_ts = ci.decrypt(content_ts)
-            with open(saveName, 'wb') as f:
-                f.write(content_ts)
-            downloadList.remove(tsUrl)
+def download_segments(ts_urls, cipher, folder_path, session=None):
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+
+    _session = session or create_session()
+
+    def _ts_path(url):
+        name = url.split('/')[-1][:-3]
+        return os.path.join(folder_path, name + '.ts')
+
+    pending = [u for u in ts_urls if not os.path.exists(_ts_path(u))]
+    skipped = len(ts_urls) - len(pending)
+
+    if not pending:
+        return 0
+
+    pbar = tqdm.tqdm(total=len(ts_urls), initial=skipped, unit='seg',
+                     bar_format='  {l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]')
+    lock = threading.Lock()
+    fail_count = 0
+
+    def worker(ts_url):
+        nonlocal fail_count
+        save_path = _ts_path(ts_url)
+        success = False
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                resp = _session.get(ts_url, timeout=TS_TIMEOUT)
+                if resp.status_code == 200:
+                    data = resp.content
+                    if cipher:
+                        data = cipher.decrypt(data)
+                    with open(save_path, 'wb') as f:
+                        f.write(data)
+                    success = True
+                    break
+            except Exception:
+                continue
+
+        with lock:
             pbar.update(1)
-        else:
-            ...
+            if not success:
+                fail_count += 1
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        list(executor.map(worker, pending))
+
+    pbar.close()
+    return fail_count
 
 
-def downloadTSList(tsUrls, ci, folderPath):
-    if not os.path.exists(folderPath):
-        os.makedirs(folderPath)
+def merge_segments(ts_urls, ts_folder, output_path):
+    with open(output_path, 'wb') as out:
+        for ts_url in ts_urls:
+            name = ts_url.split('/')[-1][:-3]
+            ts_path = os.path.join(ts_folder, name + '.ts')
+            with open(ts_path, 'rb') as f:
+                out.write(f.read())
 
-    downloadList = copy.deepcopy(tsUrls)
-    pbar = tqdm.tqdm(total=len(downloadList))
-
-    while downloadList:
-        with futures.ThreadPoolExecutor(max_workers=32) as executor:
-            executor.map(partial(downloadTS, pbar, downloadList, ci, folderPath), downloadList)
-
-
-def mergeTSFiles(tsUrls, tsFolderPath, savePath):
-    with open(savePath, 'wb') as f:
-        for ts in tqdm.tqdm(tsUrls):
-            tsName = ts.split('/')[-1][0:-3]
-            tsPath = os.path.join(tsFolderPath, tsName + ".ts")
-            with open(tsPath, 'rb') as f1:
-                f.write(f1.read())
-
-    for ts in tsUrls:
-        tsName = ts.split('/')[-1][0:-3]
-        tsPath = os.path.join(tsFolderPath, tsName + ".ts")
-        os.remove(tsPath)
-    if not os.listdir(tsFolderPath):
-        os.rmdir(tsFolderPath)
+    for ts_url in ts_urls:
+        name = ts_url.split('/')[-1][:-3]
+        ts_path = os.path.join(ts_folder, name + '.ts')
+        os.remove(ts_path)
+    if os.path.isdir(ts_folder) and not os.listdir(ts_folder):
+        os.rmdir(ts_folder)

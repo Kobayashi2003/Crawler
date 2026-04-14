@@ -5,15 +5,15 @@ import re
 import sys
 import time
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
 
-from .base_downloader import downloadVideo
+from .video_downloader import download_video
 from .core.browser import create_driver
-from .utils.helpers import sanitize_filename, is_artist_url
+from .utils.helpers import sanitize_filename, is_artist_url, extract_video_id
 from .utils.config import get_last_template, save_template
+from .utils.logger import Logger
 
 SORT_MAP = {
     'best': '近期最佳',
@@ -144,41 +144,44 @@ def collect_all_videos(url, sort_by=None, limit=None):
     return all_videos, artist_name
 
 
-def _download_one(index, total, video, folder_path, template, artist_name):
-    video_id = video['url'].rstrip('/').split('/')[-1]
+def _download_one(index, total, video, folder_path, template, artist_name, log):
+    video_id = extract_video_id(video['url'])
     folder_name = template.replace('{video_id}', video_id)
     folder_name = folder_name.replace('{title}', video['title'])
     folder_name = folder_name.replace('{artist}', artist_name)
     folder_name = sanitize_filename(folder_name)
 
-    print(f'\n[{index}/{total}] {video["title"]}')
+    log.video_start(index, total, video['title'])
     try:
-        downloadVideo(video['url'], folder_path, folder_name=folder_name)
-        print(f'  [{index}/{total}] Done.')
-        return True
+        result = download_video(video['url'], folder_path, folder_name=folder_name)
+        if result == 'skipped':
+            log.video_done(index, total, Logger.STATUS_SKIP, folder_name)
+            log.record(index, video_id, video['title'], Logger.STATUS_SKIP)
+        else:
+            log.video_done(index, total, Logger.STATUS_OK)
+            log.record(index, video_id, video['title'], Logger.STATUS_OK)
     except Exception as e:
-        print(f'  [{index}/{total}] Error: {e}')
-        return False
+        log.video_done(index, total, Logger.STATUS_FAIL, str(e))
+        log.record(index, video_id, video['title'], Logger.STATUS_FAIL, str(e))
 
 
 def main():
     parser = argparse.ArgumentParser(
         description='Download all videos from a Jable artist page'
     )
-    parser.add_argument('url', help='Artist page URL (e.g. https://jable.tv/models/hikaru-emo/)')
+    parser.add_argument('url', help='Artist page URL (e.g. https://jable.tv/models/xxx/)')
     parser.add_argument('-p', '--path', default=None, help='Download folder path')
     parser.add_argument(
         '--sort', choices=list(SORT_MAP.keys()), default=None,
         help='Sort order: best, latest, views, favorites'
     )
-    parser.add_argument('--limit', type=int, default=None, help='Maximum number of videos to download')
+    parser.add_argument('--limit', type=int, default=None, help='Maximum number of videos')
     parser.add_argument('--template', default=None,
-                        help='Naming template. Variables: {video_id}, {title}, {artist}')
-    parser.add_argument('-w', '--workers', type=int, default=1,
-                        help='Number of concurrent downloads (default: 1)')
-    parser.add_argument('--no-confirm', action='store_true', help='Skip confirmation prompt')
+                        help='Naming template: {video_id}, {title}, {artist}')
+    parser.add_argument('--no-confirm', action='store_true', help='Skip confirmation')
 
     args = parser.parse_args()
+    log = Logger()
 
     if not is_artist_url(args.url):
         print(f'Invalid Jable artist URL: {args.url}')
@@ -189,14 +192,14 @@ def main():
 
     folder_path = args.path or os.getcwd()
 
-    print(f'Collecting videos from: {args.url}')
+    log.header('Jable Artist Downloader')
+    log.info(f'  URL:      {args.url}')
     if args.sort:
-        print(f'Sort order: {SORT_MAP[args.sort]}')
+        log.info(f'  Sort:     {SORT_MAP[args.sort]}')
     if args.limit:
-        print(f'Limit: {args.limit} video(s)')
-    print(f'Template: {template}')
-    if args.workers > 1:
-        print(f'Workers: {args.workers}')
+        log.info(f'  Limit:    {args.limit}')
+    log.info(f'  Template: {template}')
+    log.info(f'  Output:   {folder_path}')
     print()
 
     videos, artist_name = collect_all_videos(args.url, sort_by=args.sort, limit=args.limit)
@@ -205,34 +208,23 @@ def main():
         print('No videos found.')
         sys.exit(0)
 
-    print(f'\n{"=" * 60}')
-    print(f'Found {len(videos)} video(s):')
-    print(f'{"=" * 60}')
+    log.header(f'Found {len(videos)} video(s)')
     for i, v in enumerate(videos, 1):
         print(f'  {i:3d}. {v["title"]}')
         print(f'       {v["url"]}')
-    print(f'{"=" * 60}\n')
 
     if not args.no_confirm:
+        print()
         confirm = input('Start downloading? [y/N]: ').strip().lower()
         if confirm != 'y':
             print('Cancelled.')
             sys.exit(0)
 
     total = len(videos)
-    if args.workers > 1:
-        with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = {
-                executor.submit(
-                    _download_one, i, total, v, folder_path, template, artist_name
-                ): i
-                for i, v in enumerate(videos, 1)
-            }
-            for future in as_completed(futures):
-                future.result()
-    else:
-        for i, v in enumerate(videos, 1):
-            _download_one(i, total, v, folder_path, template, artist_name)
+    for i, v in enumerate(videos, 1):
+        _download_one(i, total, v, folder_path, template, artist_name, log)
+
+    log.print_summary()
 
     print(f'\nAll downloads completed. ({total} video(s))')
 
