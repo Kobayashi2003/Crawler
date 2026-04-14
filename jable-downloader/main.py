@@ -8,7 +8,7 @@ def main():
     print('Jable Downloader')
     print('=' * 40)
     print('  1. Download video(s) by URL')
-    print('  2. Download all videos from a model page')
+    print('  2. Download all videos from an artist page')
     print('=' * 40)
 
     choice = input('Select mode [1/2]: ').strip()
@@ -16,15 +16,15 @@ def main():
     if choice == '1':
         download_videos()
     elif choice == '2':
-        download_model()
+        download_artist()
     else:
         print('Invalid choice.')
         sys.exit(1)
 
 
 def download_videos():
-    from src.downloader import downloadVideo
-    from src.utils import isJableVideoUrl
+    from src.base_downloader import downloadVideo
+    from src.utils.helpers import isJableVideoUrl
 
     urls_input = input('Enter video URL(s) (space-separated): ').strip().split()
     if not urls_input:
@@ -45,11 +45,11 @@ def download_videos():
         downloadVideo(url, folder_path)
 
 
-def download_model():
-    from src.model_downloader import main as model_main
-    from src.config import get_last_template
+def download_artist():
+    from src.artist_downloader import main as artist_main
+    from src.utils.config import get_last_template
 
-    url = input('Enter model page URL: ').strip()
+    url = input('Enter artist page URL: ').strip()
     if not url:
         print('No URL provided.')
         sys.exit(1)
@@ -57,8 +57,9 @@ def download_model():
     folder_path = input('Output folder (press Enter for current directory): ').strip()
     sort_order = input('Sort order (best/latest/views/favorites, press Enter to skip): ').strip()
     last_template = get_last_template()
-    template = input(f'Naming template ({{video_id}}, {{title}}, {{actress}}, default: {last_template}): ').strip()
+    template = input(f'Naming template ({{video_id}}, {{title}}, {{artist}}, default: {last_template}): ').strip()
     limit = input('Max videos to download (press Enter for all): ').strip()
+    workers = input('Concurrent downloads (press Enter for 1): ').strip()
     no_confirm = input('Skip confirmation? [y/N]: ').strip().lower() == 'y'
 
     argv = [url]
@@ -70,11 +71,13 @@ def download_model():
         argv.extend(['--template', template])
     if limit:
         argv.extend(['--limit', limit])
+    if workers:
+        argv.extend(['-w', workers])
     if no_confirm:
         argv.append('--no-confirm')
 
-    sys.argv = ['download_model'] + argv
-    model_main()
+    sys.argv = ['download_artist'] + argv
+    artist_main()
 
 
 if __name__ == '__main__':

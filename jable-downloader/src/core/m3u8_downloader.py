@@ -11,7 +11,7 @@ import requests
 import urllib.request
 from Crypto.Cipher import AES
 
-from .config import USER_AGENT
+from ..utils.config import USER_AGENT
 from .browser import create_driver
 
 

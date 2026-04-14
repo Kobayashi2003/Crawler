@@ -5,14 +5,15 @@ import re
 import sys
 import time
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
 
-from .downloader import downloadVideo
-from .browser import create_driver
-from .utils import sanitize_filename, is_model_url
-from .config import get_last_template, save_template
+from .base_downloader import downloadVideo
+from .core.browser import create_driver
+from .utils.helpers import sanitize_filename, is_artist_url
+from .utils.config import get_last_template, save_template
 
 SORT_MAP = {
     'best': '近期最佳',
@@ -70,20 +71,16 @@ def apply_sort(driver, sort_key):
             print(f'Warning: Sort tab "{sort_text}" not found.')
             return
 
-        # Check if this tab is already active
         parent = tabs[0].find_element(By.XPATH, '..')
         if 'active' in (parent.get_attribute('class') or ''):
             return
 
-        # Capture first video before click to detect content change
         soup_before = BeautifulSoup(driver.page_source, 'html.parser')
         first_el = soup_before.select_one('.video-img-box h6.title a')
         old_title = first_el.get_text(strip=True) if first_el else None
 
-        # Use JS click for reliability in headless mode
         driver.execute_script('arguments[0].click();', tabs[0])
 
-        # Wait for content to refresh (up to 10 seconds)
         for _ in range(20):
             time.sleep(0.5)
             soup_after = BeautifulSoup(driver.page_source, 'html.parser')
@@ -100,29 +97,26 @@ def apply_sort(driver, sort_key):
 def collect_all_videos(url, sort_by=None, limit=None):
     driver = create_driver()
     all_videos = []
-    actress_name = url.rstrip('/').split('/')[-1]
+    artist_name = url.rstrip('/').split('/')[-1]
 
     try:
         url = url.rstrip('/') + '/'
         driver.get(url)
         time.sleep(3)
 
-        # Extract actress display name from page
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         h2 = soup.select_one('h2')
         if h2:
             name = h2.get_text(strip=True)
             if name:
-                actress_name = name
+                artist_name = name
 
         if sort_by:
             apply_sort(driver, sort_by)
 
-        # Read total pages AFTER sort is applied
         total_pages = get_total_pages(driver.page_source)
         print(f'Found {total_pages} page(s)')
 
-        # Collect page 1 (already loaded and sorted)
         videos = parse_videos_from_html(driver.page_source)
         all_videos.extend(videos)
         print(f'  Page 1: {len(videos)} video(s)')
@@ -147,14 +141,31 @@ def collect_all_videos(url, sort_by=None, limit=None):
     finally:
         driver.quit()
 
-    return all_videos, actress_name
+    return all_videos, artist_name
+
+
+def _download_one(index, total, video, folder_path, template, artist_name):
+    video_id = video['url'].rstrip('/').split('/')[-1]
+    folder_name = template.replace('{video_id}', video_id)
+    folder_name = folder_name.replace('{title}', video['title'])
+    folder_name = folder_name.replace('{artist}', artist_name)
+    folder_name = sanitize_filename(folder_name)
+
+    print(f'\n[{index}/{total}] {video["title"]}')
+    try:
+        downloadVideo(video['url'], folder_path, folder_name=folder_name)
+        print(f'  [{index}/{total}] Done.')
+        return True
+    except Exception as e:
+        print(f'  [{index}/{total}] Error: {e}')
+        return False
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Download all videos from a Jable model page'
+        description='Download all videos from a Jable artist page'
     )
-    parser.add_argument('url', help='Model page URL (e.g. https://jable.tv/models/hikaru-emo/)')
+    parser.add_argument('url', help='Artist page URL (e.g. https://jable.tv/models/hikaru-emo/)')
     parser.add_argument('-p', '--path', default=None, help='Download folder path')
     parser.add_argument(
         '--sort', choices=list(SORT_MAP.keys()), default=None,
@@ -162,16 +173,17 @@ def main():
     )
     parser.add_argument('--limit', type=int, default=None, help='Maximum number of videos to download')
     parser.add_argument('--template', default=None,
-                        help='Naming template. Variables: {video_id}, {title}, {actress}')
+                        help='Naming template. Variables: {video_id}, {title}, {artist}')
+    parser.add_argument('-w', '--workers', type=int, default=1,
+                        help='Number of concurrent downloads (default: 1)')
     parser.add_argument('--no-confirm', action='store_true', help='Skip confirmation prompt')
 
     args = parser.parse_args()
 
-    if not is_model_url(args.url):
-        print(f'Invalid Jable model URL: {args.url}')
+    if not is_artist_url(args.url):
+        print(f'Invalid Jable artist URL: {args.url}')
         sys.exit(1)
 
-    # Use saved template if not specified
     template = args.template or get_last_template()
     save_template(template)
 
@@ -183,9 +195,11 @@ def main():
     if args.limit:
         print(f'Limit: {args.limit} video(s)')
     print(f'Template: {template}')
+    if args.workers > 1:
+        print(f'Workers: {args.workers}')
     print()
 
-    videos, actress_name = collect_all_videos(args.url, sort_by=args.sort, limit=args.limit)
+    videos, artist_name = collect_all_videos(args.url, sort_by=args.sort, limit=args.limit)
 
     if not videos:
         print('No videos found.')
@@ -205,21 +219,22 @@ def main():
             print('Cancelled.')
             sys.exit(0)
 
-    for i, v in enumerate(videos, 1):
-        video_id = v['url'].rstrip('/').split('/')[-1]
-        folder_name = template.replace('{video_id}', video_id)
-        folder_name = folder_name.replace('{title}', v['title'])
-        folder_name = folder_name.replace('{actress}', actress_name)
-        folder_name = sanitize_filename(folder_name)
+    total = len(videos)
+    if args.workers > 1:
+        with ThreadPoolExecutor(max_workers=args.workers) as executor:
+            futures = {
+                executor.submit(
+                    _download_one, i, total, v, folder_path, template, artist_name
+                ): i
+                for i, v in enumerate(videos, 1)
+            }
+            for future in as_completed(futures):
+                future.result()
+    else:
+        for i, v in enumerate(videos, 1):
+            _download_one(i, total, v, folder_path, template, artist_name)
 
-        print(f'\n[{i}/{len(videos)}] {v["title"]}')
-        try:
-            downloadVideo(v['url'], folder_path, folder_name=folder_name)
-            print('  Done.')
-        except Exception as e:
-            print(f'  Error: {e}')
-
-    print(f'\nAll downloads completed. ({len(videos)} video(s))')
+    print(f'\nAll downloads completed. ({total} video(s))')
 
 
 if __name__ == '__main__':

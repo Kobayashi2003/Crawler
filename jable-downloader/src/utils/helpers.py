@@ -14,5 +14,5 @@ def isJableVideoUrl(url):
         return False
 
 
-def is_model_url(url):
+def is_artist_url(url):
     return bool(re.match(r'https?://jable\.tv/models/[^/]+/?$', url))
