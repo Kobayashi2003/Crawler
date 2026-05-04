@@ -12,7 +12,7 @@ def is_video_url(url):
 
 
 def is_artist_url(url):
-    return bool(re.match(r'https?://jable\.tv/models/[^/]+/?$', url))
+    return bool(re.match(r'https?://jable\.tv/(s1/)?models/[^/]+/?$', url))
 
 
 def extract_video_id(url):

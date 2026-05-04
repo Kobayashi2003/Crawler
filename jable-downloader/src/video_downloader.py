@@ -10,8 +10,8 @@ from .core.encoder import ffmpeg_encode
 from .utils.helpers import extract_video_id
 
 
-def _scrape_video_page(url):
-    driver = create_driver()
+def _scrape_video_page(url, proxy_url=None):
+    driver = create_driver(proxy_url=proxy_url)
     try:
         driver.get(url=url)
         page_source = driver.page_source
@@ -55,7 +55,7 @@ def _download_cover(cover_url, folder_path, session):
                 print(f'  [!] Cover failed: {e}')
 
 
-def download_video(url, folder_path, folder_name=None):
+def download_video(url, folder_path, folder_name=None, proxy_pool=None):
     video_id = extract_video_id(url)
     folder_name = folder_name or video_id
     video_folder = os.path.join(folder_path, folder_name)
@@ -67,10 +67,11 @@ def download_video(url, folder_path, folder_name=None):
     if os.path.exists(video_file):
         return 'skipped'
 
-    session = create_session()
+    proxy = proxy_pool.get_proxy() if proxy_pool else None
+    proxy_url = proxy.get('http') if proxy else None
+    session = create_session(proxy=proxy)
 
-    # Single page load for both cover and m3u8
-    cover_url, m3u8_url = _scrape_video_page(url)
+    cover_url, m3u8_url = _scrape_video_page(url, proxy_url=proxy_url)
 
     if not m3u8_url:
         raise RuntimeError('m3u8 URL not found on page')
@@ -79,7 +80,8 @@ def download_video(url, folder_path, folder_name=None):
 
     ts_urls, cipher = fetch_m3u8(m3u8_url, video_folder, video_id, session=session)
 
-    fail_count = download_segments(ts_urls, cipher, ts_folder, session=session)
+    fail_count = download_segments(ts_urls, cipher, ts_folder, session=session,
+                                    proxy_pool=proxy_pool)
     if fail_count:
         raise RuntimeError(f'{fail_count} segment(s) failed after retries')
 

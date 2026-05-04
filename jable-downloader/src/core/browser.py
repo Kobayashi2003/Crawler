@@ -8,7 +8,7 @@ from selenium.webdriver.chrome.service import Service
 from ..utils.config import USER_AGENT
 
 
-def create_driver():
+def create_driver(proxy_url=None):
     options = Options()
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
@@ -17,6 +17,8 @@ def create_driver():
     options.add_argument('--log-level=3')
     options.add_argument('--disable-logging')
     options.add_argument(f'user-agent={USER_AGENT}')
+    if proxy_url:
+        options.add_argument(f'--proxy-server={proxy_url}')
     options.add_experimental_option('excludeSwitches', ['enable-logging'])
     service = Service(log_output=os.devnull)
     service.creation_flags = subprocess.CREATE_NO_WINDOW

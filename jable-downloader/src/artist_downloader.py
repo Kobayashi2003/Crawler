@@ -12,8 +12,9 @@ from selenium.webdriver.common.by import By
 from .video_downloader import download_video
 from .core.browser import create_driver
 from .utils.helpers import sanitize_filename, is_artist_url, extract_video_id
-from .utils.config import get_last_template, save_template
+from .utils.config import get_last_template, save_template, load_config
 from .utils.logger import Logger
+from .utils.proxy import load_proxy_pool
 
 SORT_MAP = {
     'best': '近期最佳',
@@ -94,8 +95,10 @@ def apply_sort(driver, sort_key):
         print(f'Warning: Could not apply sort "{sort_text}": {e}')
 
 
-def collect_all_videos(url, sort_by=None, limit=None):
-    driver = create_driver()
+def collect_all_videos(url, sort_by=None, limit=None, proxy_pool=None):
+    proxy = proxy_pool.get_proxy() if proxy_pool else None
+    proxy_url = proxy.get('http') if proxy else None
+    driver = create_driver(proxy_url=proxy_url)
     all_videos = []
     artist_name = url.rstrip('/').split('/')[-1]
 
@@ -144,7 +147,8 @@ def collect_all_videos(url, sort_by=None, limit=None):
     return all_videos, artist_name
 
 
-def _download_one(index, total, video, folder_path, template, artist_name, log):
+def _download_one(index, total, video, folder_path, template, artist_name, log,
+                   proxy_pool=None):
     video_id = extract_video_id(video['url'])
     folder_name = template.replace('{video_id}', video_id)
     folder_name = folder_name.replace('{title}', video['title'])
@@ -153,7 +157,8 @@ def _download_one(index, total, video, folder_path, template, artist_name, log):
 
     log.video_start(index, total, video['title'])
     try:
-        result = download_video(video['url'], folder_path, folder_name=folder_name)
+        result = download_video(video['url'], folder_path, folder_name=folder_name,
+                                proxy_pool=proxy_pool)
         if result == 'skipped':
             log.video_done(index, total, Logger.STATUS_SKIP, folder_name)
             log.record(index, video_id, video['title'], Logger.STATUS_SKIP)
@@ -182,6 +187,7 @@ def main():
 
     args = parser.parse_args()
     log = Logger()
+    proxy_pool = load_proxy_pool(load_config())
 
     if not is_artist_url(args.url):
         print(f'Invalid Jable artist URL: {args.url}')
@@ -200,9 +206,12 @@ def main():
         log.info(f'  Limit:    {args.limit}')
     log.info(f'  Template: {template}')
     log.info(f'  Output:   {folder_path}')
+    if proxy_pool:
+        log.info(f'  Proxy:    {proxy_pool.size()} node(s)')
     print()
 
-    videos, artist_name = collect_all_videos(args.url, sort_by=args.sort, limit=args.limit)
+    videos, artist_name = collect_all_videos(args.url, sort_by=args.sort, limit=args.limit,
+                                               proxy_pool=proxy_pool)
 
     if not videos:
         print('No videos found.')
@@ -222,7 +231,7 @@ def main():
 
     total = len(videos)
     for i, v in enumerate(videos, 1):
-        _download_one(i, total, v, folder_path, template, artist_name, log)
+        _download_one(i, total, v, folder_path, template, artist_name, log, proxy_pool)
 
     log.print_summary()
 
@@ -240,9 +249,13 @@ def main():
 
         retry_total = len(retry_videos)
         for i, v in enumerate(retry_videos, 1):
-            _download_one(i, retry_total, v, folder_path, template, artist_name, log)
+            _download_one(i, retry_total, v, folder_path, template, artist_name, log,
+                          proxy_pool)
 
         log.print_summary()
+
+    if proxy_pool:
+        proxy_pool.cleanup()
 
 
 if __name__ == '__main__':

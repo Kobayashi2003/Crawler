@@ -53,11 +53,26 @@ def fetch_m3u8(m3u8_url, folder_path, video_id, session=None):
     return ts_urls, cipher
 
 
-def download_segments(ts_urls, cipher, folder_path, session=None):
+def download_segments(ts_urls, cipher, folder_path, session=None, proxy_pool=None):
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
     _session = session or create_session()
+
+    # Build per-proxy sessions for multi-IP distribution
+    _pool_sz = proxy_pool.size() if proxy_pool else 0
+    if _pool_sz > 1:
+        _sessions = [create_session(proxy=proxy_pool.get_proxy()) for _ in range(_pool_sz)]
+        _si = [0]
+        _sl = threading.Lock()
+
+        def _next():
+            with _sl:
+                s = _sessions[_si[0]]
+                _si[0] = (_si[0] + 1) % len(_sessions)
+                return s
+    else:
+        _next = lambda: _session  # noqa: E731
 
     def _ts_path(url):
         name = url.split('/')[-1][:-3]
@@ -78,10 +93,11 @@ def download_segments(ts_urls, cipher, folder_path, session=None):
         nonlocal fail_count
         save_path = _ts_path(ts_url)
         success = False
+        sess = _next()
 
         for attempt in range(MAX_RETRIES):
             try:
-                resp = _session.get(ts_url, timeout=TS_TIMEOUT)
+                resp = sess.get(ts_url, timeout=TS_TIMEOUT)
                 if resp.status_code == 200:
                     data = resp.content
                     if cipher:
@@ -91,6 +107,7 @@ def download_segments(ts_urls, cipher, folder_path, session=None):
                     success = True
                     break
             except Exception:
+                sess = _next()
                 continue
 
         with lock:

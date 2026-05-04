@@ -16,7 +16,7 @@ CONFIG_PATH = os.path.join(
 )
 
 
-def create_session(max_retries=3, timeout=30):
+def create_session(max_retries=3, timeout=30, proxy=None):
     session = requests.Session()
     session.headers.update({'User-Agent': USER_AGENT})
     retry = Retry(
@@ -29,6 +29,8 @@ def create_session(max_retries=3, timeout=30):
     session.mount('https://', adapter)
     session.mount('http://', adapter)
     session.timeout = timeout
+    if proxy:
+        session.proxies.update(proxy)
     return session
 
 
@@ -52,4 +54,17 @@ def get_last_template():
 def save_template(template):
     config = load_config()
     config['template'] = template
+    save_config(config)
+
+
+def get_last_input(key, default=''):
+    config = load_config()
+    return config.get('last_input', {}).get(key, default)
+
+
+def save_last_input(**kwargs):
+    config = load_config()
+    last = config.get('last_input', {})
+    last.update(kwargs)
+    config['last_input'] = last
     save_config(config)
