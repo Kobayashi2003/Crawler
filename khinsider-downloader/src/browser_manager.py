@@ -7,118 +7,63 @@ from .config import Config
 
 _LOCALHOST_BYPASS = 'localhost,127.0.0.1,::1'
 
-class BrowserManager:
-    def __init__(self, config: Config):
-        self.config = config
-        self.driver = None
 
-    def setup_driver(self):
-        # Bypass system proxy for localhost so ChromeDriver <-> Chrome DevTools
-        # connections are not intercepted (e.g. by Clash / VPN / corporate proxy).
-        for var in ('NO_PROXY', 'no_proxy'):
-            existing = os.environ.get(var, '')
-            if _LOCALHOST_BYPASS not in existing:
-                os.environ[var] = f'{existing},{_LOCALHOST_BYPASS}'.lstrip(',')
+def create_driver(config: Config):
+    # Bypass system proxy for localhost so ChromeDriver <-> Chrome DevTools
+    # connections are not intercepted (e.g. by Clash / VPN / corporate proxy).
+    for var in ('NO_PROXY', 'no_proxy'):
+        existing = os.environ.get(var, '')
+        if _LOCALHOST_BYPASS not in existing:
+            os.environ[var] = f'{existing},{_LOCALHOST_BYPASS}'.lstrip(',')
 
-        if self.config.browser == "auto":
-            self.driver = self._try_browsers()
-        else:
-            self.driver = self._setup_specific_browser(self.config.browser)
-
-        if not self.driver:
-            raise Exception("No suitable browser found")
-
-        return self.driver
-
-    def _try_browsers(self):
-        browsers = [
-            ("chrome", self._setup_chrome),
-            ("edge", self._setup_edge),
-            ("firefox", self._setup_firefox)
-        ]
-
-        for browser_name, setup_func in browsers:
+    if config.browser == 'auto':
+        for name, fn in [('chrome', _setup_chrome), ('edge', _setup_edge), ('firefox', _setup_firefox)]:
             try:
-                print(f"Trying {browser_name}...")
-                driver = setup_func()
-                print(f"Successfully initialized {browser_name}")
+                print(f'Trying {name}...')
+                driver = fn(config)
+                print(f'Successfully initialized {name}')
                 return driver
             except Exception as e:
-                print(f"Failed to initialize {browser_name}: {e}")
-                continue
+                print(f'Failed to initialize {name}: {e}')
+        raise RuntimeError('No suitable browser found')
 
-        return None
+    setup = {'chrome': _setup_chrome, 'edge': _setup_edge, 'firefox': _setup_firefox}
+    if config.browser not in setup:
+        raise ValueError(f'Unsupported browser: {config.browser}')
+    return setup[config.browser](config)
 
-    def _setup_specific_browser(self, browser_name):
-        setup_functions = {
-            "chrome": self._setup_chrome,
-            "edge": self._setup_edge,
-            "firefox": self._setup_firefox
-        }
 
-        if browser_name not in setup_functions:
-            raise ValueError(f"Unsupported browser: {browser_name}")
+def _setup_chrome(config: Config):
+    options = ChromeOptions()
+    options.add_argument(f'--user-agent={config.user_agent}')
+    options.add_argument('--disable-blink-features=AutomationControlled')
+    options.add_argument('--no-proxy-server')
+    options.add_experimental_option('excludeSwitches', ['enable-automation'])
+    options.add_experimental_option('useAutomationExtension', False)
+    if config.headless:
+        options.add_argument('--headless=new')
+    driver = webdriver.Chrome(options=options)
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    return driver
 
-        return setup_functions[browser_name]()
 
-    def _setup_chrome(self):
-        options = ChromeOptions()
-        self._configure_chrome_options(options)
+def _setup_edge(config: Config):
+    options = EdgeOptions()
+    options.add_argument(f'--user-agent={config.user_agent}')
+    options.add_argument('--disable-blink-features=AutomationControlled')
+    options.add_argument('--no-proxy-server')
+    options.add_experimental_option('excludeSwitches', ['enable-automation'])
+    options.add_experimental_option('useAutomationExtension', False)
+    if config.headless:
+        options.add_argument('--headless=new')
+    driver = webdriver.Edge(options=options)
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    return driver
 
-        driver = webdriver.Chrome(options=options)
-        self._configure_chrome_driver(driver)
 
-        return driver
-
-    def _setup_edge(self):
-        options = EdgeOptions()
-        self._configure_edge_options(options)
-
-        driver = webdriver.Edge(options=options)
-        self._configure_edge_driver(driver)
-
-        return driver
-
-    def _setup_firefox(self):
-        options = FirefoxOptions()
-        self._configure_firefox_options(options)
-
-        driver = webdriver.Firefox(options=options)
-
-        return driver
-
-    def _configure_chrome_options(self, options):
-        options.add_argument(f'--user-agent={self.config.user_agent}')
-        options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_argument('--no-proxy-server')
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option('useAutomationExtension', False)
-
-        if self.config.headless:
-            options.add_argument('--headless=new')
-
-    def _configure_edge_options(self, options):
-        options.add_argument(f'--user-agent={self.config.user_agent}')
-        options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_argument('--no-proxy-server')
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option('useAutomationExtension', False)
-
-        if self.config.headless:
-            options.add_argument('--headless=new')
-
-    def _configure_firefox_options(self, options):
-        options.set_preference("general.useragent.override", self.config.user_agent)
-
-        if self.config.headless:
-            options.add_argument('--headless')
-
-    def _configure_chrome_driver(self, driver):
-        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
-    def _configure_edge_driver(self, driver):
-        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
-    def quit(self):
-        if self.driver:
-            self.driver.quit()
+def _setup_firefox(config: Config):
+    options = FirefoxOptions()
+    options.set_preference('general.useragent.override', config.user_agent)
+    if config.headless:
+        options.add_argument('--headless')
+    return webdriver.Firefox(options=options)

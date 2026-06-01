@@ -10,4 +10,6 @@ class Config:
     download_delay: float = 1.0
     page_delay: float = 2.0
     download_booklet: bool = True
+    retry: bool = False
+    max_workers: int = 4
     user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
