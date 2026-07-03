@@ -1,31 +1,36 @@
 # khinsider-downloader
 
-A downloader for [KHInsider](https://downloads.khinsider.com). Downloads video game music albums with support for MP3/FLAC formats, booklet images, and multi-CD organization.
+Downloads video game music albums from [KHInsider](https://downloads.khinsider.com) — MP3/FLAC formats, booklet images and multi-CD layouts. Scraping uses Selenium; file downloads run concurrently.
 
-## Installation
+## Install
 
 ```bash
 pip install -r requirements.txt
 ```
 
-A supported browser (Chrome, Edge, or Firefox) is required. WebDrivers are managed automatically.
+A supported browser (Chrome, Edge, or Firefox) is required; WebDrivers are managed automatically by Selenium.
 
 ## Usage
 
 ```bash
-python main.py <album_url> [options]
+python main.py <album_url> [<album_url> ...] [options]
 ```
 
-Example:
+| Option | Description | Default |
+|---|---|---|
+| `url` | One or more album URLs | — |
+| `-o, --output` | Output directory | `downloads` |
+| `-f, --format` | Audio format: `mp3`, `flac`, `both` | `both` |
+| `-b, --browser` | Browser: `chrome`, `edge`, `firefox`, `auto` | `auto` |
+| `--headless` | Run browser headless | off |
+| `--no-booklet` | Skip booklet images | off |
+| `--retry` | Retry each resource until it succeeds | off |
+| `-w, --workers` | Max concurrent download threads | `4` |
+
+### Example
 
 ```bash
-python main.py "https://downloads.khinsider.com/game-soundtracks/album/album-name"
+python main.py "https://downloads.khinsider.com/game-soundtracks/album/album-name" -f flac
 ```
 
-### Options
-
-- `-o, --output`: Output directory (default: `downloads`)
-- `-f, --format`: Audio format — `mp3`, `flac`, or `both` (default: `both`)
-- `-b, --browser`: Browser to use — `chrome`, `edge`, `firefox`, or `auto` (default: `auto`)
-- `--headless`: Run browser in headless mode
-- `--no-booklet`: Skip downloading booklet images
+Importable: `from main import download_album, Config`.

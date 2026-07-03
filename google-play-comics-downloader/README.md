@@ -6,7 +6,7 @@ A downloader for [Google Play Books](https://play.google.com/books). Browser con
 
 1. Open a book in [Google Play Books](https://play.google.com/books) web reader
 2. Open browser Developer Tools (F12) → Console
-3. Paste the contents of `src/downloader.js` and press Enter
+3. Paste the contents of `main.js` and press Enter
 4. Run the following commands in the console:
 
 ```javascript

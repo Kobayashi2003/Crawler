@@ -1,22 +1,34 @@
 # x-image-downloader
 
-A downloader for [X (Twitter)](https://x.com). Scrapes and downloads images from a user's timeline using Playwright, with automatic deduplication and logging.
+Scrapes a user's [X (Twitter)](https://x.com) timeline with Playwright and downloads full-resolution images, skipping reposts/ads and de-duplicating via a JSON log. Images are saved under `output/<author>/`.
 
-## Installation
+## Install
 
 ```bash
 pip install -r requirements.txt
 playwright install chromium
 ```
 
+Export your X cookies to `cookies.json` (browser-export format).
+
 ## Usage
 
-1. Export your X/Twitter cookies to `cookies.json` (browser export format supported)
-2. Edit the target user URL in `src/downloader.py`
-3. Run:
-
 ```bash
-python main.py
+python main.py <url> [<url> ...] [options]
 ```
 
-Images are saved to the `images/` directory, organized by author. A `log.json` file tracks downloaded posts to avoid duplicates.
+| Option | Description | Default |
+|---|---|---|
+| `urls` | One or more user timeline URLs, e.g. `https://x.com/<user>` | — |
+| `-c, --cookies` | Path to `cookies.json` | `cookies.json` |
+| `-o, --output` | Output directory | `images` |
+| `-l, --log` | Dedup log file | `log.json` |
+| `--headless` | Run the browser headless | off |
+
+### Example
+
+```bash
+python main.py https://x.com/KuroTuki_nn -o images
+```
+
+Importable: `from main import run`.
