@@ -1,0 +1,13 @@
+.vscode/
+__pycache__/
+*.pyc
+bak/
+temp/
+
+data/artists/
+data/artists.json
+data/config.json
+data/history.json
+cache/
+logs/
+downloads/
