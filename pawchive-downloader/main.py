@@ -11,16 +11,18 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 from src import (
-    API, Cache, CLIContext, Downloader, Logger, Scheduler, Storage,
+    API, Cache, CLIContext, Downloader, ExternalLinksDownloader, ExternalLinksExtractor,
+    Logger, Migrator, Notifier, Scheduler, Storage, Validator,
 )
-from src.plugins import dynamic_get
-from src.prompt import CLIPromptSession
+from src.cli.prompt import CLIPromptSession
+from src.common.env import load_dotenv
+from src.common.hotreload import dynamic_get
 
 
 def get_commands() -> dict:
-    """Load the command map fresh each call so edits to src/cli.py hot-reload."""
-    from src.cli import COMMAND_MAP
-    return dynamic_get('COMMAND_MAP', 'src/cli.py', default=COMMAND_MAP)
+    """Load the command map fresh each call so edits to src/cli/commands.py hot-reload."""
+    from src.cli.commands import COMMAND_MAP
+    return dynamic_get('COMMAND_MAP', 'src/cli/commands.py', default=COMMAND_MAP)
 
 _interrupts = 0
 
@@ -39,15 +41,22 @@ def parse_command(text: str):
 
 
 def initialize():
-    storage = Storage("data")
+    load_dotenv()  # proxies and PAWCHIVE_* overrides, before anything reads them
+    storage = Storage()
     config = storage.load_config()
     logger = Logger(config.logs_dir)
     cache = Cache(config.cache_dir, logger, config, storage)
     api = API(logger, config)
-    downloader = Downloader(config, logger, storage, cache, api)
+    notifier = Notifier(enabled=config.notify)
+    downloader = Downloader(config, logger, storage, cache, api, notifier=notifier)
     scheduler = Scheduler(storage, downloader, logger, config.global_timer,
                           max_workers=config.max_concurrent_artists)
-    ctx = CLIContext(storage, cache, api, downloader, scheduler)
+    migrator = Migrator(storage, cache)
+    validator = Validator(config.data_dir, cache, storage, config, logger)
+    links_extractor = ExternalLinksExtractor(cache, logger)
+    links_downloader = ExternalLinksDownloader(logger)
+    ctx = CLIContext(storage, cache, api, downloader, scheduler, migrator, validator,
+                     links_extractor, links_downloader)
     return ctx, scheduler, logger
 
 

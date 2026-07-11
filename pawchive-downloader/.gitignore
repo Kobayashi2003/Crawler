@@ -3,11 +3,13 @@ __pycache__/
 *.pyc
 bak/
 temp/
+.env
 
 data/artists/
 data/artists.json
 data/config.json
 data/history.json
+data/gone_upstream.json
 cache/
 logs/
 downloads/

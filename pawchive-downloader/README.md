@@ -1,39 +1,18 @@
 # pawchive-downloader
 
-A downloader for [Pawchive](https://pawchive.st). Tracks creators, caches their
-posts, and downloads files concurrently with incremental updates and scheduling.
+Downloads creator posts and attachments from [Pawchive](https://pawchive.pw) — an
+interactive shell that tracks creators, caches their post lists, and fetches new
+files incrementally. Downloads run concurrently across creators, posts and files,
+with optional scheduling.
 
-It is a sibling of `kemono-downloader-v2` and reuses the same creator/post ids,
-so `artists.json` entries can be carried over — only the `url` and file host
-differ. See `src/api.py` for the API differences.
-
-## Installation
+## Install
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Only dependency is `requests`. Optionally copy the example configs:
-
-```bash
-cp data/config.example.json data/config.json     # optional; sane defaults otherwise
-cp data/artists.example.json data/artists.json   # optional
-```
-
-## Migrating from kemono-downloader-v2
-
-Pawchive reuses kemono's creator/post ids, so existing data carries over. From a
-side-by-side checkout of both projects:
-
-```bash
-python migrate_from_kemono.py            # defaults to ../kemono-downloader-v2
-python migrate_from_kemono.py <path>     # or point at a kemono-v2 checkout
-```
-
-It copies (never moves) your artists, the `data/artists/` folder tree (urls
-rewritten to pawchive.st), the posts cache (per-post `done` state preserved, so
-finished posts aren't re-downloaded) and compatible config fields. Afterwards
-run `check-all` to resume where kemono left off.
+`requests` is the only hard dependency; `prompt_toolkit` adds Tab-completion and
+persistent history to the prompt and degrades gracefully if absent.
 
 ## Usage
 
@@ -41,75 +20,60 @@ run `check-all` to resume where kemono left off.
 python main.py
 ```
 
-Type `help` for the full command list. Basic workflow:
+Type `help` for the full command list. The common ones:
+
+| Command | Description |
+|---|---|
+| `add` | Track a creator by URL |
+| `list` | Active creators and their progress |
+| `sync` / `sync-all` | Refresh cached post lists (no files) |
+| `download` | Download one creator's pending posts |
+| `download-all` | Queue every active creator |
+| `download-pending` | Queue only creators that still have posts to get |
+| `tasks` | Show the download queue |
+| `cancel` / `cancel-all` | Cancel one / every queued & running download |
+| `config` / `config-artist` | Edit global / per-creator settings |
+
+Some commands take inline params as `command:key=value` — `list:sort_by=recent,service=fanbox`,
+`sync:deep=true` (also catch edits), `links:match=drive\.google`, `reset:after_date=2025-01-01`,
+`history:limit=25`. Date-range downloads (`download-after` / `-before` / `-between`)
+prompt for their dates.
+
+### Example
 
 ```text
-> add                  # Add a creator by URL (kemono or pawchive URL both work)
-> list                 # List tracked creators and their progress
-> check                # Queue a download for one creator
-> check-all            # Queue downloads for all active creators
-> tasks                # Watch queued / running / recent tasks
+> add                    # paste a creator URL
+> download-all           # queue everything active
+> tasks                  # watch progress
 ```
 
-Commands take inline params as `command:key=value,key=value`, e.g.:
+## Configuration
 
-```text
-> list:sort_by=recent,service=fanbox
-> list-all
-> history:limit=25
-```
+Files land in `{download_dir}/{artist_folder}/{post_folder}/{file}`, templated by
+`artist_folder_template`, `post_folder_template` and `file_template` — global in
+`data/config.json`, overridable per creator via `config-artist`. Set `global_timer`
+(or a per-creator `timer`) for `daily`/`weekly`/`monthly` auto-checks while the
+program runs.
 
-### Downloading by date
-
-```text
-> check-from           # Posts published after a date
-> check-until          # Posts published up to a date
-> check-range          # Posts within a date range
-```
-
-### Files & layout
-
-Downloads are written as:
+Behaviour (templates, concurrency, retries, filters) lives in `data/config.json`;
+machine-specific paths and endpoints come from the environment. Copy `.env.example`
+to `.env` — real environment variables win over it.
 
 ```
-downloads/ / {artist_folder} / {post_folder} / {file}
+precedence:  environment  >  data/config.json  >  built-in defaults
 ```
 
-templated by `artist_folder_template`, `post_folder_template` and
-`file_template` (global, overridable per-artist via `config-artist`). Post text
-is saved to `content.txt` when `save_content` is enabled.
+| Variable | Purpose |
+|---|---|
+| `PAWCHIVE_DOWNLOAD_DIR` | where files are written |
+| `PAWCHIVE_DATA_DIR` | where `config.json` lives — env only, it locates that file |
+| `PAWCHIVE_CACHE_DIR` / `PAWCHIVE_LOGS_DIR` | runtime locations |
+| `PAWCHIVE_API_BASE` / `PAWCHIVE_FILE_BASE` | endpoints (Pawchive has moved `.st` → `.pw`) |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | standard names, read by `requests` |
 
-### Scheduling
+## Notes
 
-Set `global_timer` in `config.json` (or a per-artist `timer`) to auto-check on a
-`daily` / `weekly` / `monthly` cadence while the program is running.
-
-### Interactive prompt
-
-When `prompt_toolkit` is installed the `> ` prompt gains **Tab command
-completion** (substring/fuzzy) and **persistent history** (↑/↓, seeded from
-`data/history.json`); artist selection prompts complete on number/id/name/alias.
-Without it — or when stdin is piped — everything degrades to plain `input()`.
-
-### Plugins (hot reload)
-
-`src/cli.py`'s `COMMAND_MAP` and `plugins/format_plugin.py` are re-read from disk
-on every use, so you can edit command handlers or path-formatting logic and see
-the change on the next command — no restart. `plugins/format_plugin.py` ships as
-no-op hooks with commented examples (e.g. trim a specific creator's titles);
-delete the file to disable plugins entirely.
-
-## How it works
-
-- **API** (`src/api.py`) — talks to `https://pawchive.st/api/v1`. Post lists come
-  from `/{service}/user/{id}` (already including each post's files & content),
-  and full files download from `https://file.pawchive.st/data{path}?f={name}`.
-  Since the profile has no post count, the list is paged until a short page and
-  change detection diffs the profile `updated` timestamp.
-- **Cache** (`src/cache.py`) — one `{id}_posts.json` + `{id}_profile.json` per
-  creator, tracking per-post `done` state so re-runs only fetch what's new.
-- **Downloader** (`src/downloader.py`) — concurrent across artists × posts ×
-  files, advancing each artist's `last_date` over the contiguous run of
-  completed posts.
-- **Scheduler** (`src/scheduler.py`) — bounded worker pool fed by manual and
-  timer-triggered tasks.
+Completeness is prioritised over speed. Files are written to a unique temp file,
+size-checked, then placed with an atomic `os.replace`; anything that fails is
+recorded so the post stays pending and the next run retries it. Re-running is
+always safe — finished posts are never re-fetched.

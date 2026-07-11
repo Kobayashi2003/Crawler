@@ -1,14 +1,29 @@
-from .api import API
-from .cache import Cache
-from .cli import CLIContext, COMMAND_MAP
-from .downloader import Downloader
-from .filters import PostFilter
-from .formatter import Formatter
-from .logger import Logger
-from .scheduler import Scheduler
-from .storage import Storage
+"""Pawchive downloader.
+
+    common/    generic helpers (logging, naming, backoff, hot reload)
+    core/      models + the fetch -> cache -> download pipeline
+    services/  optional features built on core (migrate, validate, links)
+    cli/       command handlers and the prompt session
+    plugins/   user-editable, hot-reloaded plugin files
+"""
+
+from .common.logger import Logger
+from .common.notifier import Notifier
+from .core.api import API
+from .core.cache import Cache
+from .core.downloader import Downloader
+from .core.filters import PostFilter
+from .core.formatter import Formatter
+from .core.scheduler import Scheduler
+from .core.storage import Storage
+from .services.external_links import ExternalLinksDownloader, ExternalLinksExtractor
+from .services.migrator import Migrator
+from .services.validator import Validator
+from .cli.commands import CLIContext, COMMAND_MAP
 
 __all__ = [
-    'API', 'Cache', 'CLIContext', 'COMMAND_MAP', 'Downloader', 'PostFilter',
-    'Formatter', 'Logger', 'Scheduler', 'Storage',
+    'Logger', 'Notifier',
+    'API', 'Cache', 'Downloader', 'PostFilter', 'Formatter', 'Scheduler', 'Storage',
+    'ExternalLinksDownloader', 'ExternalLinksExtractor', 'Migrator', 'Validator',
+    'CLIContext', 'COMMAND_MAP',
 ]
