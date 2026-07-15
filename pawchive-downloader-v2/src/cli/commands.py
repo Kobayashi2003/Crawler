@@ -1128,24 +1128,39 @@ def cmd_test(ctx: CLIContext):
         print(f"Plugin test failed: {e}")
 
 
+def _help_row(cmd) -> str:
+    """Left column for the overview: name, aliases, and a short param hint.
+
+    Params past the third collapse to '…' so no row (e.g. links, with six)
+    blows out the shared column; the full list lives in `help <command>`.
+    """
+    row = cmd.name + (f" | {' | '.join(cmd.aliases)}" if cmd.aliases else "")
+    if cmd.params:
+        names = [p.name for p in cmd.params]
+        hint = ",".join(names[:3]) + ("…" if len(names) > 3 else "")
+        row += f" :{hint}"
+    return row
+
+
 @_cmd('help', 'SESSION', 'This overview, or details for one command',
       params=(Param('command', 'str', '', 'show usage details for this command'),))
 def cmd_help(ctx: CLIContext, command=""):
     if command:
         _help_detail(command)
         return
-    print("\nPawchive Downloader — command:key=value,key=value   (or: command value)")
-    print("A unique prefix works ('hist' -> history); Tab completes names.\n")
+    print("\nPawchive Downloader")
+    print("  syntax:  command:key=value,key=value   (or:  command value)")
+    print("  a unique prefix works ('hist' → history); Tab completes names")
+
+    rows = [(cmd, _help_row(cmd)) for cmd in _REGISTRY]
+    width = max(len(row) for _, row in rows)
     group = None
-    for cmd in _REGISTRY:
+    for cmd, row in rows:
         if cmd.group != group:
             group = cmd.group
-            print(f"  {group}")
-        display = cmd.name + (f" | {' | '.join(cmd.aliases)}" if cmd.aliases else "")
-        if cmd.params:
-            display += " :" + ",".join(p.name for p in cmd.params)
-        print(f"    {display:<42} {cmd.summary}")
-    print("\n  'help <command>' shows a command's parameters and defaults.")
+            print(f"\n  {group}")
+        print(f"    {row:<{width}}   {cmd.summary}")
+    print("\n  'help <command>' shows a command's full parameters and defaults.")
 
 
 def _help_detail(name: str):
@@ -1158,9 +1173,11 @@ def _help_detail(name: str):
         print("  takes no parameters")
         return
     print(f"  usage: {cmd.signature()}")
+    name_w = max(len(p.name) for p in cmd.params)
+    kind_w = max(len(p.kind) for p in cmd.params)
     for p in cmd.params:
         default = f" (default {p.default!r})" if p.default not in ('', None) else ""
-        print(f"    {p.name:<12} {p.kind:<5} {p.help}{default}")
+        print(f"    {p.name:<{name_w}}  {p.kind:<{kind_w}}  {p.help}{default}")
 
 
 @_cmd('clear', 'SESSION', 'Clear the screen')
