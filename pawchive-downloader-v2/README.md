@@ -56,6 +56,14 @@ shows the current filter (and sets the cutoff), `links-reviewed` marks a creator
 done, and `:filtered=false` bypasses the whole thing. An empty section filters
 nothing.
 
+`group=` nests the output by `artist` and/or `domain`; `/` separates levels and
+their order is the nesting order (the inline syntax already uses `,` between
+params, so levels use `/`). `links-all:group=artist/domain` groups by creator
+then by cloud host; `group=domain/artist` reverses it. Groups are ordered by
+size, and each header carries its link count. `details=true` prints each link's
+full (untruncated) post title, id and date under it. For example
+`links-all:group=artist/domain,details=true`.
+
 While downloads run in the background, the prompt line stays fixed at the bottom
 with a once-a-second status bar (running/queued tasks, file count, throughput);
 progress lines print above it without disturbing input. With the `notify` config

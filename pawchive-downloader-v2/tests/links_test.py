@@ -100,5 +100,58 @@ check("no cutoff -> reviewed artist fully hidden",
 check("no domain list -> any domain passes",
       flt2(L(url="https://example.com/a", domain="example.com")))
 
+# 6. links-all grouping: keys parsed in input order, deduped; '/' nests levels.
+from src.cli.commands import _group_keys, _emit_grouped
+from src.cli.registry import CommandError
+
+check("single key", _group_keys("artist") == ["artist"])
+check("two keys keep input order", _group_keys("artist/domain") == ["artist", "domain"])
+check("reversed order is honored", _group_keys("domain/artist") == ["domain", "artist"])
+check("aliases resolve (d/a)", _group_keys("d/a") == ["domain", "artist"])
+check("'type' is an alias for domain", _group_keys("type") == ["domain"])
+check("duplicates collapse", _group_keys("artist/artist") == ["artist"])
+check("blank -> no grouping", _group_keys("") == [])
+try:
+    _group_keys("artist/bogus")
+    check("unknown key raises", False)
+except CommandError:
+    check("unknown key raises", True)
+
+# 7. _emit_grouped nests by the given order and counts correctly.
+import io as _io
+links = [
+    L(artist_id="fanbox_1", domain="mega.nz", url="https://mega.nz/1", post_id="p1"),
+    L(artist_id="fanbox_1", domain="mega.nz", url="https://mega.nz/2", post_id="p2"),
+    L(artist_id="fanbox_1", domain="drive.google.com", url="https://drive.google.com/3", post_id="p3"),
+    L(artist_id="fanbox_2", domain="mega.nz", url="https://mega.nz/4", post_id="p4"),
+]
+names = {"fanbox_1": "Alice [fanbox_1]", "fanbox_2": "Bob [fanbox_2]"}
+
+buf = _io.StringIO(); _real = sys.stdout; sys.stdout = buf
+shown = _emit_grouped(links, ["artist", "domain"], details=False, names=names, cap=100)
+sys.stdout = _real
+out = buf.getvalue()
+check("emit returns links printed", shown == 4)
+check("larger artist bucket (Alice, 3) printed before Bob (1)",
+      out.index("Alice [fanbox_1]  (3)") < out.index("Bob [fanbox_2]  (1)"))
+check("domain nested under artist with count", "mega.nz  (2)" in out and "drive.google.com  (1)" in out)
+check("leaf shows post id + url", "[p1] https://mega.nz/1" in out)
+
+long_title = "A very long post title that must not be truncated in details mode"
+det_links = [L(domain="mega.nz", url="https://mega.nz/1", post_id="p1",
+               post_title=long_title, post_published="2026-03-04T12:00:00")]
+buf = _io.StringIO(); sys.stdout = buf
+_emit_grouped(det_links, ["domain"], details=True, names={}, cap=100)
+sys.stdout = _real
+det = buf.getvalue()
+check("details prints the url", "https://mega.nz/1" in det)
+check("details prints full untruncated title", long_title in det)
+check("details prints post id and date", "[p1]" in det and "2026-03-04" in det)
+
+buf = _io.StringIO(); sys.stdout = buf
+shown = _emit_grouped(links, ["domain"], details=False, names={}, cap=2)
+sys.stdout = _real
+check("cap limits printed leaf links", shown == 2)
+
 print("\n" + ("ALL PASS" if not fails else f"FAILURES: {fails}"))
 sys.exit(1 if fails else 0)

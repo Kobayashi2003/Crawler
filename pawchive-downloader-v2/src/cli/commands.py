@@ -548,7 +548,10 @@ def cmd_undone(ctx: CLIContext, artist=""):
 
 _LINKS_PARAMS = (Param('match', 'str', '', 'keep only URLs matching this regex'),
                  Param('unique', 'bool', True, 'drop repeated URLs'),
-                 Param('filtered', 'bool', True, 'apply the configured links_filter'))
+                 Param('filtered', 'bool', True, 'apply the configured links_filter'),
+                 Param('group', 'str', '', 'nest output; keys artist/domain, order = nesting '
+                                           '(e.g. group=artist/domain)'),
+                 Param('details', 'bool', False, "show each post's full title, id and date"))
 
 
 def _links_filter(ctx: CLIContext, filtered: bool):
@@ -563,23 +566,28 @@ def _links_filter(ctx: CLIContext, filtered: bool):
 
 @_cmd('links', 'INSPECT', "External URLs in one creator's posts",
       params=(_ARTIST, *_LINKS_PARAMS))
-def cmd_links(ctx: CLIContext, artist="", match="", unique=True, filtered=True):
+def cmd_links(ctx: CLIContext, artist="", match="", unique=True, filtered=True,
+              group="", details=False):
+    keys = _group_keys(group)  # validate before any work
     artist = select_artist(ctx, artist)
     if not artist:
         return
     flt = _links_filter(ctx, filtered)
     _print_links(ctx, ctx.links_extractor.extract_from_artist(
-        artist.id, match=match or None, unique=unique, filter_func=flt))
+        artist.id, match=match or None, unique=unique, filter_func=flt),
+        keys=keys, details=details)
 
 
 @_cmd('links-all', 'INSPECT', 'External URLs across all creators', params=_LINKS_PARAMS)
-def cmd_links_all(ctx: CLIContext, match="", unique=True, filtered=True):
+def cmd_links_all(ctx: CLIContext, match="", unique=True, filtered=True,
+                  group="", details=False):
+    keys = _group_keys(group)  # validate before any work
     flt = _links_filter(ctx, filtered)
     all_links = []
     for a in get_artists(ctx):
         all_links.extend(ctx.links_extractor.extract_from_artist(
             a.id, match=match or None, unique=unique, filter_func=flt))
-    _print_links(ctx, all_links)
+    _print_links(ctx, all_links, keys=keys, details=details)
 
 
 @_cmd('links-filter', 'INSPECT', 'Show the links filter; optionally set its cutoff date',
@@ -645,7 +653,86 @@ def cmd_links_reviewed(ctx: CLIContext, artist="", remove=False):
     ctx.storage.save_config(config)
 
 
-def _print_links(ctx: CLIContext, links):
+_LINK_CAP = 200  # link lines printed before truncating (grouping surfaces more)
+
+# Group keys and their aliases; value is the canonical key.
+_GROUP_ALIASES = {'artist': 'artist', 'a': 'artist',
+                  'domain': 'domain', 'd': 'domain', 'type': 'domain', 'site': 'domain'}
+
+
+def _group_keys(spec: str) -> List[str]:
+    """Ordered, de-duplicated grouping keys from a `/`-separated spec.
+
+    `/` (not `,`) separates levels because the inline param syntax already
+    splits on commas. Order is the nesting order: `artist/domain` groups by
+    artist, then domain within each artist.
+    """
+    keys: List[str] = []
+    for raw in spec.replace('\\', '/').split('/'):
+        token = raw.strip().lower()
+        if not token:
+            continue
+        key = _GROUP_ALIASES.get(token)
+        if key is None:
+            raise CommandError(
+                f"Unknown group key '{token}'. Use artist and/or domain, "
+                f"e.g. group=artist/domain.")
+        if key not in keys:
+            keys.append(key)
+    return keys
+
+
+def _link_label(key: str, link, names) -> str:
+    if key == 'artist':
+        return names.get(link.artist_id, link.artist_id)
+    return link.domain or 'unknown'
+
+
+def _print_link(link, details: bool, indent: int):
+    pad = "  " * indent
+    if not details:
+        print(f"{pad}[{link.post_id}] {link.url}")
+        return
+    date = (link.post_published or link.post_edited or '')[:10]
+    edited = ""
+    if link.post_edited and link.post_edited[:10] != (link.post_published or '')[:10]:
+        edited = f" (edited {link.post_edited[:10]})"
+    print(f"{pad}{link.url}")
+    print(f"{pad}    [{link.post_id}] {date or '(no date)'}{edited}  "
+          f"{link.post_title or '(untitled)'}")
+
+
+def _emit_grouped(links, keys, details, names, cap) -> int:
+    """Print links nested by `keys`; groups ordered by size. Returns lines shown.
+
+    Once `cap` link lines are printed, remaining leaves are skipped but their
+    parent headers (already printed) still carry true counts.
+    """
+    printed = [0]
+
+    def recurse(items, depth):
+        buckets: dict = {}
+        for link in items:
+            buckets.setdefault(_link_label(keys[depth], link, names), []).append(link)
+        for label in sorted(buckets, key=lambda l: (-len(buckets[l]), l)):
+            group = buckets[label]
+            print(f"{'  ' * (depth + 1)}{label}  ({len(group)})")
+            if depth + 1 < len(keys):
+                recurse(group, depth + 1)
+            else:
+                for link in group:
+                    if printed[0] >= cap:
+                        return
+                    _print_link(link, details, depth + 2)
+                    printed[0] += 1
+            if printed[0] >= cap:
+                return
+
+    recurse(links, 0)
+    return printed[0]
+
+
+def _print_links(ctx: CLIContext, links, keys=None, details=False):
     if not links:
         print("No links found.")
         return
@@ -655,10 +742,19 @@ def _print_links(ctx: CLIContext, links):
     for domain, count in stats['top_domains'].items():
         print(f"  {count:>4}  {domain}")
     print()
-    for link in links[:50]:
-        print(f"  [{link.post_id}] {link.url}")
-    if len(links) > 50:
-        print(f"  ... and {len(links) - 50} more")
+
+    keys = keys or []
+    names = ({a.id: f"{a.display_name()} [{a.id}]" for a in ctx.storage.get_artists()}
+             if 'artist' in keys else {})
+    if keys:
+        shown = _emit_grouped(links, keys, details, names, _LINK_CAP)
+    else:
+        shown = min(len(links), _LINK_CAP)
+        for link in links[:_LINK_CAP]:
+            _print_link(link, details, indent=1)
+    if shown < len(links):
+        print(f"  ... and {len(links) - shown} more "
+              f"(narrow with match=, or group= to organize)")
 
 
 @_cmd('download-gdrive', 'INSPECT', 'Download found Google Drive links (needs gdown)',
