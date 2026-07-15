@@ -70,6 +70,11 @@ class Config:
     global_timer: Optional[Dict] = None
     global_filter: Dict = field(default_factory=dict)
 
+    # `links`/`links-all` view filter; empty = show everything. Keys:
+    # allowed_domains (keep only these), reviewed_artists (hide, links already
+    # gone through), reviewed_before (posts newer than this still surface).
+    links_filter: Dict = field(default_factory=dict)
+
     # Pawchive has migrated domains before (.st -> .pw).
     api_base: str = "https://pawchive.pw/api/v1"
     file_base: str = "https://file.pawchive.pw"

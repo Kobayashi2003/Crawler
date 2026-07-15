@@ -65,5 +65,40 @@ except Exception as e:
 check("cancel -> single handler", COMMAND_MAP["cancel"].handler is cmd_cancel)
 check("cancel-all -> bulk handler", COMMAND_MAP["cancel-all"].handler is cmd_cancel_all)
 
+# 5. links_filter semantics (the de-hardcoded kemono mechanism):
+# domain whitelist + reviewed artists hidden up to a cutoff date.
+from src.services.external_links import make_link_filter
+from src.core.models import ExternalLink
+
+
+def L(**kw):
+    base = dict(url="https://mega.nz/file/x", domain="mega.nz", protocol="https",
+                post_id="1", post_title="", post_published="2026-01-01",
+                post_edited=None, artist_id="fanbox_1")
+    base.update(kw)
+    return ExternalLink(**base)
+
+
+check("empty config -> no filter (shows everything)", make_link_filter({}) is None)
+
+flt = make_link_filter({"allowed_domains": ["mega.nz", "drive.google.com"],
+                        "reviewed_artists": ["fanbox_9"],
+                        "reviewed_before": "2026-02-10"})
+check("allowed domain passes", flt(L()))
+check("non-whitelisted domain dropped",
+      not flt(L(url="https://example.com/a", domain="example.com")))
+check("reviewed artist's old link hidden",
+      not flt(L(artist_id="fanbox_9", post_published="2026-01-01")))
+check("reviewed artist's post after cutoff still shows",
+      flt(L(artist_id="fanbox_9", post_published="2026-03-01")))
+check("an edit after the cutoff resurfaces an old post",
+      flt(L(artist_id="fanbox_9", post_published="2026-01-01", post_edited="2026-03-01")))
+
+flt2 = make_link_filter({"reviewed_artists": ["fanbox_9"]})
+check("no cutoff -> reviewed artist fully hidden",
+      not flt2(L(artist_id="fanbox_9", post_published="2026-03-01")))
+check("no domain list -> any domain passes",
+      flt2(L(url="https://example.com/a", domain="example.com")))
+
 print("\n" + ("ALL PASS" if not fails else f"FAILURES: {fails}"))
 sys.exit(1 if fails else 0)

@@ -18,7 +18,8 @@ from ..core.files import get_config_value
 from ..core.models import Artist, MigrationConfig
 from ..core.scheduler import Scheduler
 from ..core.storage import Storage
-from ..services.external_links import ExternalLinksDownloader, ExternalLinksExtractor
+from ..services.external_links import (ExternalLinksDownloader, ExternalLinksExtractor,
+                                       make_link_filter)
 from ..services.migrator import Migrator
 from ..services.validator import Validator
 from .prompt import ask, confirm, prompt_artist
@@ -546,26 +547,102 @@ def cmd_undone(ctx: CLIContext, artist=""):
 
 
 _LINKS_PARAMS = (Param('match', 'str', '', 'keep only URLs matching this regex'),
-                 Param('unique', 'bool', True, 'drop repeated URLs'))
+                 Param('unique', 'bool', True, 'drop repeated URLs'),
+                 Param('filtered', 'bool', True, 'apply the configured links_filter'))
+
+
+def _links_filter(ctx: CLIContext, filtered: bool):
+    """The configured link predicate, or None (filter empty or bypassed)."""
+    if not filtered:
+        return None
+    flt = make_link_filter(ctx.storage.load_config().links_filter)
+    if flt:
+        print("(links_filter active — 'links-filter' to inspect, :filtered=false to bypass)")
+    return flt
 
 
 @_cmd('links', 'INSPECT', "External URLs in one creator's posts",
       params=(_ARTIST, *_LINKS_PARAMS))
-def cmd_links(ctx: CLIContext, artist="", match="", unique=True):
+def cmd_links(ctx: CLIContext, artist="", match="", unique=True, filtered=True):
     artist = select_artist(ctx, artist)
     if not artist:
         return
+    flt = _links_filter(ctx, filtered)
     _print_links(ctx, ctx.links_extractor.extract_from_artist(
-        artist.id, match=match or None, unique=unique))
+        artist.id, match=match or None, unique=unique, filter_func=flt))
 
 
 @_cmd('links-all', 'INSPECT', 'External URLs across all creators', params=_LINKS_PARAMS)
-def cmd_links_all(ctx: CLIContext, match="", unique=True):
+def cmd_links_all(ctx: CLIContext, match="", unique=True, filtered=True):
+    flt = _links_filter(ctx, filtered)
     all_links = []
     for a in get_artists(ctx):
         all_links.extend(ctx.links_extractor.extract_from_artist(
-            a.id, match=match or None, unique=unique))
+            a.id, match=match or None, unique=unique, filter_func=flt))
     _print_links(ctx, all_links)
+
+
+@_cmd('links-filter', 'INSPECT', 'Show the links filter; optionally set its cutoff date',
+      params=(Param('cutoff', 'date', '', 'set reviewed_before to this date'),))
+def cmd_links_filter(ctx: CLIContext, cutoff=""):
+    config = ctx.storage.load_config()
+    lf = dict(config.links_filter or {})
+    if cutoff:
+        lf['reviewed_before'] = cutoff
+        config.links_filter = lf
+        ctx.storage.save_config(config)
+        print(f"reviewed_before -> {cutoff}")
+
+    domains = lf.get('allowed_domains') or []
+    reviewed = lf.get('reviewed_artists') or []
+    print(f"\nlinks_filter: {'active' if domains or reviewed else 'inactive (shows everything)'}")
+    if domains:
+        head = ', '.join(domains[:6]) + (' ...' if len(domains) > 6 else '')
+        print(f"  allowed_domains   {len(domains)}: {head}")
+    else:
+        print("  allowed_domains   (any domain)")
+    print(f"  reviewed_before   {lf.get('reviewed_before') or '- (reviewed artists fully hidden)'}")
+    print(f"  reviewed_artists  {len(reviewed)}")
+    if reviewed:
+        known = {a.id: a for a in ctx.storage.get_artists()}
+        for aid in reviewed:
+            name = known[aid].display_name() if aid in known else '(not tracked here)'
+            print(f"    {aid}  {name}")
+    print("\nallowed_domains is edited in data/config.json (links_filter section);"
+          "\n'links-reviewed' marks a creator's links as gone through.")
+
+
+@_cmd('links-reviewed', 'INSPECT', "Mark a creator's links reviewed (hidden up to the cutoff)",
+      params=(_ARTIST, Param('remove', 'bool', False, 'unmark instead of marking')))
+def cmd_links_reviewed(ctx: CLIContext, artist="", remove=False):
+    artist = select_artist(ctx, artist)
+    if not artist:
+        return
+    config = ctx.storage.load_config()
+    lf = dict(config.links_filter or {})
+    reviewed = list(lf.get('reviewed_artists') or [])
+
+    if remove:
+        if artist.id not in reviewed:
+            print(f"{artist.display_name()} was not marked reviewed.")
+            return
+        reviewed.remove(artist.id)
+        print(f"{artist.display_name()} unmarked; its links show again.")
+    else:
+        if artist.id in reviewed:
+            print(f"{artist.display_name()} is already marked reviewed.")
+            return
+        reviewed.append(artist.id)
+        cutoff = lf.get('reviewed_before')
+        if cutoff:
+            print(f"{artist.display_name()} marked reviewed; posts after {cutoff} still show.")
+        else:
+            print(f"{artist.display_name()} marked reviewed; all its links are now hidden "
+                  f"(set links-filter:cutoff=... to keep new posts visible).")
+
+    lf['reviewed_artists'] = reviewed
+    config.links_filter = lf
+    ctx.storage.save_config(config)
 
 
 def _print_links(ctx: CLIContext, links):

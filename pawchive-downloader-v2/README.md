@@ -48,6 +48,14 @@ Commands that act on one creator accept `artist=` inline (id, name, alias, or a
 unique fragment) or prompt with Tab completion — browsing happens via `list`,
 selection never dumps a table first.
 
+`links` / `links-all` apply the optional `links_filter` section of
+`data/config.json`: `allowed_domains` keeps only cloud-storage links, and
+`reviewed_artists` hides creators whose links you already went through — except
+posts newer than `reviewed_before`, so fresh links keep surfacing. `links-filter`
+shows the current filter (and sets the cutoff), `links-reviewed` marks a creator
+done, and `:filtered=false` bypasses the whole thing. An empty section filters
+nothing.
+
 While downloads run in the background, the prompt line stays fixed at the bottom
 with a once-a-second status bar (running/queued tasks, file count, throughput);
 progress lines print above it without disturbing input. With the `notify` config

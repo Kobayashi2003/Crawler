@@ -10,6 +10,11 @@
     "time": "01:00"
   },
   "global_filter": {},
+  "links_filter": {
+    "allowed_domains": ["drive.google.com", "mega.nz", "dropbox.com"],
+    "reviewed_artists": ["fanbox_12345"],
+    "reviewed_before": "2026-01-01"
+  },
   "retry_delay": 5,
   "request_timeout": 30,
   "trust_updated_timestamp": false,
