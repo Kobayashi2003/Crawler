@@ -1128,18 +1128,10 @@ def cmd_test(ctx: CLIContext):
         print(f"Plugin test failed: {e}")
 
 
-# Commands with more params than this list them one-per-line (with each
-# param's explanation) under the row, instead of an inline `:a,b,c` hint --
-# so a long list is never truncated or allowed to break column alignment.
-_INLINE_PARAM_MAX = 3
-
-
 def _help_row(cmd) -> str:
-    """Left column for the overview: name, aliases, and -- for few-param
-    commands -- an inline `:a,b,c` hint. Many-param commands omit the hint and
-    expand their params below the row instead."""
+    """Command, aliases and an inline `:a,b,c` param hint, all left-aligned."""
     row = cmd.name + (f" | {' | '.join(cmd.aliases)}" if cmd.aliases else "")
-    if cmd.params and len(cmd.params) <= _INLINE_PARAM_MAX:
+    if cmd.params:
         row += " :" + ",".join(p.name for p in cmd.params)
     return row
 
@@ -1154,18 +1146,13 @@ def cmd_help(ctx: CLIContext, command=""):
     print("  syntax:  command:key=value,key=value   (or:  command value)")
     print("  a unique prefix works ('hist' → history); Tab completes names")
 
-    rows = [(cmd, _help_row(cmd)) for cmd in _REGISTRY]
-    width = max(len(row) for _, row in rows)
     group = None
-    for cmd, row in rows:
+    for cmd in _REGISTRY:
         if cmd.group != group:
             group = cmd.group
             print(f"\n  {group}")
-        print(f"    {row:<{width}}   {cmd.summary}")
-        if len(cmd.params) > _INLINE_PARAM_MAX:
-            pw = max(len(p.name) for p in cmd.params)
-            for p in cmd.params:
-                print(f"        {p.name:<{pw}}  {p.help}")
+        print(f"    {_help_row(cmd)}")
+        print(f"      {cmd.summary}")
     print("\n  'help <command>' shows a command's parameter types and defaults.")
 
 
