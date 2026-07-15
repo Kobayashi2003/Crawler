@@ -61,8 +61,9 @@ except Exception as e:
     check(f"_parse does not raise (got {e!r})", False)
 
 # 4. cancel is single, cancel-all is bulk -- distinct handlers.
-check("cancel -> single handler", COMMAND_MAP.get("cancel") is cmd_cancel)
-check("cancel-all -> bulk handler", COMMAND_MAP.get("cancel-all") is cmd_cancel_all)
+# COMMAND_MAP values are Command records; the handler function sits on .handler.
+check("cancel -> single handler", COMMAND_MAP["cancel"].handler is cmd_cancel)
+check("cancel-all -> bulk handler", COMMAND_MAP["cancel-all"].handler is cmd_cancel_all)
 
 print("\n" + ("ALL PASS" if not fails else f"FAILURES: {fails}"))
 sys.exit(1 if fails else 0)
