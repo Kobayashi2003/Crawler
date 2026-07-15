@@ -129,9 +129,8 @@ def select_artist(ctx: CLIContext) -> Optional[Artist]:
     if not artists:
         print("No artists. Use 'add' first.")
         return None
-    print_artist_table(ctx, artists)
     try:
-        raw = prompt_artist("\nSelect artist (number/id/name, Tab to complete): ", artists)
+        raw = prompt_artist("Select artist (id/name, Tab to complete; 'list' to browse): ", artists)
     except (KeyboardInterrupt, EOFError):
         print("\nCancelled")
         return None

@@ -159,8 +159,8 @@ class Downloader:
             service=data.get('service', artist.service),
             title=data.get('title', ''),
             content=data.get('content', ''),
-            published=data.get('published', ''),
-            added=data.get('added', ''),
+            published=data.get('published') or '',
+            added=data.get('added') or '',
             edited=data.get('edited'),
             file=data.get('file') or None,
             attachments=data.get('attachments') or [],
@@ -207,6 +207,12 @@ class Downloader:
         post.title = data.get('title', post.title)
         if remote_edited:
             post.edited = data['edited']
+        # Pawchive can serve a post before `published` is filled in and set it on
+        # a later scrape; adopt a present value, never null out one we have.
+        if data.get('published'):
+            post.published = data['published']
+        if data.get('added'):
+            post.added = data['added']
 
         if post.done and (has_more_files or (detect_edits and edited_changed)):
             post.done = False
