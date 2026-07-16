@@ -30,6 +30,13 @@ class Param:
     kind: str = 'str'          # str | bool | int | date
     default: Any = ''
     help: str = ''
+    choices: Tuple[str, ...] = ()   # allowed values, if a fixed set
+
+    def values(self) -> str:
+        """Short hint of accepted values, for help output."""
+        if self.choices:
+            return '|'.join(self.choices)
+        return {'bool': 'true|false', 'date': 'YYYY-MM-DD', 'int': 'N'}.get(self.kind, '')
 
 
 @dataclass(frozen=True)
@@ -130,6 +137,9 @@ def _coerce(param: Param, raw: str) -> Any:
             raise CommandError(
                 f"'{param.name}' must be a date (YYYY-MM-DD or ISO), got '{raw}'.")
         return raw
+    if param.choices and raw not in param.choices:
+        raise CommandError(
+            f"'{param.name}' must be one of {param.values()}, got '{raw}'.")
     return raw
 
 

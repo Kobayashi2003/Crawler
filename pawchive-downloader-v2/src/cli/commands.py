@@ -57,10 +57,11 @@ def _cmd(name, group, summary, params=(), aliases=()):
 
 
 # Shared parameter specs.
-_ARTIST = Param('artist', 'str', '', 'creator id, name or alias; prompted if omitted')
-_LISTING = (Param('sort_by', 'str', 'name', 'name | recent | posts | service'),
-            Param('service', 'str', '', 'only this service, e.g. fanbox'))
-_DEEP = Param('deep', 'bool', False, 'also re-flag edited posts for re-download')
+_ARTIST = Param('artist', 'str', '', 'id, name or alias (else prompted)')
+_LISTING = (Param('sort_by', 'str', 'name', 'order',
+                  choices=('name', 'recent', 'posts', 'service')),
+            Param('service', 'str', '', 'only this service'))
+_DEEP = Param('deep', 'bool', False, 'also re-flag edits')
 
 
 # ============================================================================
@@ -245,7 +246,7 @@ def cmd_remove(ctx: CLIContext, artist=""):
     print(f"Removed {artist.display_name()}.")
 
 
-@_cmd('info', 'CREATORS', "Show one creator's details, overrides and progress",
+@_cmd('info', 'CREATORS', "Creator details & progress",
       params=(_ARTIST,))
 def cmd_info(ctx: CLIContext, artist=""):
     artist = select_artist(ctx, artist)
@@ -334,7 +335,7 @@ def cmd_uncomplete_all(ctx):
 
 
 @_cmd('ignore-inactive', 'CREATORS', 'Ignore creators idle for N months',
-      params=(Param('months', 'int', 6, 'idle threshold in months'),))
+      params=(Param('months', 'int', 6, 'idle months'),))
 def cmd_ignore_inactive(ctx: CLIContext, months=6):
     cutoff = (datetime.now() - timedelta(days=months * 30)).isoformat()
     stale = [a for a in get_artists(ctx, only_active=True)
@@ -389,7 +390,7 @@ def cmd_list_completed(ctx, sort_by="name", service=""):
     _show_list(ctx, lambda a: a.completed, sort_by, service, "completed artists")
 
 
-@_cmd('list-pending', 'BROWSE', 'Active creators with posts still to get', params=_LISTING)
+@_cmd('list-pending', 'BROWSE', 'Active creators with pending posts', params=_LISTING)
 def cmd_list_pending(ctx, sort_by="name", service=""):
     _show_list(ctx, lambda a: _is_active(a) and _has_work(ctx, a),
                sort_by, service, "artists with pending work")
@@ -454,7 +455,7 @@ def _ask_date(value: str, label: str) -> Optional[str]:
 
 
 @_cmd('download-after', 'DOWNLOAD', 'Only posts published after a date',
-      params=(_ARTIST, Param('date', 'date', '', 'published-after cutoff')))
+      params=(_ARTIST, Param('date', 'date', '', 'after this date')))
 def cmd_download_after(ctx: CLIContext, artist="", date=""):
     artist = select_artist(ctx, artist)
     if not artist:
@@ -465,7 +466,7 @@ def cmd_download_after(ctx: CLIContext, artist="", date=""):
 
 
 @_cmd('download-before', 'DOWNLOAD', 'Only posts published up to a date',
-      params=(_ARTIST, Param('date', 'date', '', 'published-up-to cutoff')))
+      params=(_ARTIST, Param('date', 'date', '', 'up to this date')))
 def cmd_download_before(ctx: CLIContext, artist="", date=""):
     artist = select_artist(ctx, artist)
     if not artist:
@@ -476,8 +477,8 @@ def cmd_download_before(ctx: CLIContext, artist="", date=""):
 
 
 @_cmd('download-between', 'DOWNLOAD', 'Only posts within a date range',
-      params=(_ARTIST, Param('after', 'date', '', 'range start (exclusive)'),
-              Param('before', 'date', '', 'range end (inclusive)')))
+      params=(_ARTIST, Param('after', 'date', '', 'range start'),
+              Param('before', 'date', '', 'range end')))
 def cmd_download_between(ctx: CLIContext, artist="", after="", before=""):
     artist = select_artist(ctx, artist)
     if not artist:
@@ -497,7 +498,7 @@ def cmd_download_between(ctx: CLIContext, artist="", after="", before=""):
 # Sync
 # ============================================================================
 
-@_cmd('sync', 'SYNC', "Refresh one creator's cached post list (no files)",
+@_cmd('sync', 'SYNC', "Refresh cached post list (no files)",
       params=(_ARTIST, _DEEP))
 def cmd_sync(ctx: CLIContext, artist="", deep=False):
     artist = select_artist(ctx, artist)
@@ -511,7 +512,7 @@ def cmd_sync(ctx: CLIContext, artist="", deep=False):
           f"{s['done']}/{s['total']} done, {new} new{note}.")
 
 
-@_cmd('sync-all', 'SYNC', 'Refresh all active creators (no files)', params=(_DEEP,))
+@_cmd('sync-all', 'SYNC', 'Refresh all cached post lists', params=(_DEEP,))
 def cmd_sync_all(ctx: CLIContext, deep=False):
     artists = get_artists(ctx, only_active=True)
     print(f"Syncing {len(artists)} creators" + (" (deep)" if deep else "") + "...")
@@ -546,12 +547,11 @@ def cmd_undone(ctx: CLIContext, artist=""):
         print(f"  [{(p.published or '')[:10]}] [{p.id}] {p.title[:60]}{flag}")
 
 
-_LINKS_PARAMS = (Param('match', 'str', '', 'keep only URLs matching this regex'),
-                 Param('unique', 'bool', True, 'drop repeated URLs'),
-                 Param('filtered', 'bool', True, 'apply the configured links_filter'),
-                 Param('group', 'str', '', 'nest output; keys artist/domain, order = nesting '
-                                           '(e.g. group=artist/domain)'),
-                 Param('details', 'bool', False, "show each post's full title, id and date"))
+_LINKS_PARAMS = (Param('match', 'str', '', 'URL regex filter'),
+                 Param('unique', 'bool', True, 'drop repeats'),
+                 Param('filtered', 'bool', True, 'apply links_filter'),
+                 Param('group', 'str', '', 'nest by artist/domain (e.g. artist/domain)'),
+                 Param('details', 'bool', False, 'show post title, id, date'))
 
 
 def _links_filter(ctx: CLIContext, filtered: bool):
@@ -564,7 +564,7 @@ def _links_filter(ctx: CLIContext, filtered: bool):
     return flt
 
 
-@_cmd('links', 'INSPECT', "External URLs in one creator's posts",
+@_cmd('links', 'INSPECT', "A creator's external URLs",
       params=(_ARTIST, *_LINKS_PARAMS))
 def cmd_links(ctx: CLIContext, artist="", match="", unique=True, filtered=True,
               group="", details=False):
@@ -578,7 +578,7 @@ def cmd_links(ctx: CLIContext, artist="", match="", unique=True, filtered=True,
         keys=keys, details=details)
 
 
-@_cmd('links-all', 'INSPECT', 'External URLs across all creators', params=_LINKS_PARAMS)
+@_cmd('links-all', 'INSPECT', "All creators' external URLs", params=_LINKS_PARAMS)
 def cmd_links_all(ctx: CLIContext, match="", unique=True, filtered=True,
                   group="", details=False):
     keys = _group_keys(group)  # validate before any work
@@ -590,8 +590,8 @@ def cmd_links_all(ctx: CLIContext, match="", unique=True, filtered=True,
     _print_links(ctx, all_links, keys=keys, details=details)
 
 
-@_cmd('links-filter', 'INSPECT', 'Show the links filter; optionally set its cutoff date',
-      params=(Param('cutoff', 'date', '', 'set reviewed_before to this date'),))
+@_cmd('links-filter', 'INSPECT', 'Show / adjust the links filter',
+      params=(Param('cutoff', 'date', '', 'set reviewed_before'),))
 def cmd_links_filter(ctx: CLIContext, cutoff=""):
     config = ctx.storage.load_config()
     lf = dict(config.links_filter or {})
@@ -620,8 +620,8 @@ def cmd_links_filter(ctx: CLIContext, cutoff=""):
           "\n'links-reviewed' marks a creator's links as gone through.")
 
 
-@_cmd('links-reviewed', 'INSPECT', "Mark a creator's links reviewed (hidden up to the cutoff)",
-      params=(_ARTIST, Param('remove', 'bool', False, 'unmark instead of marking')))
+@_cmd('links-reviewed', 'INSPECT', "Mark a creator's links reviewed",
+      params=(_ARTIST, Param('remove', 'bool', False, 'unmark instead')))
 def cmd_links_reviewed(ctx: CLIContext, artist="", remove=False):
     artist = select_artist(ctx, artist)
     if not artist:
@@ -758,7 +758,7 @@ def _print_links(ctx: CLIContext, links, keys=None, details=False):
 
 
 @_cmd('download-gdrive', 'INSPECT', 'Download found Google Drive links (needs gdown)',
-      params=(Param('match', 'str', '', 'extra regex filter'),))
+      params=(Param('match', 'str', '', 'extra URL regex'),))
 def cmd_download_gdrive(ctx: CLIContext, match=""):
     all_links = []
     for a in get_artists(ctx):
@@ -779,7 +779,7 @@ def cmd_download_gdrive(ctx: CLIContext, match=""):
 # Maintain
 # ============================================================================
 
-_AFTER_DATE = Param('after_date', 'date', '', 'only posts published after this date')
+_AFTER_DATE = Param('after_date', 'date', '', 'only after this date')
 
 
 @_cmd('reset', 'MAINTAIN', "Mark one creator's posts undone",
@@ -858,8 +858,8 @@ def cmd_validate_all(ctx: CLIContext):
     _print_conflicts(ctx.validator.find_conflicts(ctx.storage.get_artists()))
 
 
-_CLEAN_PARAMS = (Param('quarantine', 'str', '_invalid', 'folder orphans are moved into'),
-                 Param('dry', 'bool', True, 'preview only; use dry=false to apply'))
+_CLEAN_PARAMS = (Param('quarantine', 'str', '_invalid', 'target folder'),
+                 Param('dry', 'bool', True, 'preview only'))
 
 
 @_cmd('clean-folders', 'MAINTAIN', 'Quarantine orphan download folders',
@@ -980,7 +980,7 @@ def _task_label(ctx: CLIContext, task) -> str:
 
 
 @_cmd('cancel', 'TASKS & CONFIG', 'Cancel one queued or running download',
-      params=(Param('artist', 'str', '', 'task to cancel; picked from a list if omitted'),))
+      params=(Param('artist', 'str', '', 'task id/name (else pick from list)'),))
 def cmd_cancel(ctx: CLIContext, artist=""):
     active = ctx.scheduler.list_active()
     queued = ctx.scheduler.list_queued()
@@ -1020,7 +1020,7 @@ def cmd_cancel_all(ctx: CLIContext):
     print(f"Cancelled all. {n} were running.")
 
 
-@_cmd('config', 'TASKS & CONFIG', 'Edit global settings interactively')
+@_cmd('config', 'TASKS & CONFIG', 'Edit global settings')
 def cmd_config(ctx: CLIContext):
     config = ctx.storage.load_config()
     editable = [
@@ -1109,7 +1109,7 @@ def cmd_config_conflicts(ctx: CLIContext):
 # ============================================================================
 
 @_cmd('history', 'SESSION', 'Recent commands',
-      params=(Param('limit', 'int', 10, 'how many entries'),))
+      params=(Param('limit', 'int', 10, 'entries'),))
 def cmd_history(ctx: CLIContext, limit=10):
     for r in ctx.storage.get_history(limit):
         mark = "ok " if r.success else "ERR"
@@ -1128,32 +1128,32 @@ def cmd_test(ctx: CLIContext):
         print(f"Plugin test failed: {e}")
 
 
-def _help_row(cmd) -> str:
-    """Command, aliases and an inline `:a,b,c` param hint, all left-aligned."""
-    row = cmd.name + (f" | {' | '.join(cmd.aliases)}" if cmd.aliases else "")
-    if cmd.params:
-        row += " :" + ",".join(p.name for p in cmd.params)
-    return row
+def _param_spec(cmd) -> str:
+    """`key=val|val, key` -- param names with their value hints, for the overview."""
+    return ", ".join(f"{p.name}={p.values()}" if p.values() else p.name
+                     for p in cmd.params)
 
 
-@_cmd('help', 'SESSION', 'This overview, or details for one command',
-      params=(Param('command', 'str', '', 'show usage details for this command'),))
+@_cmd('help', 'SESSION', 'This overview, or one command in detail',
+      params=(Param('command', 'str', '', 'command to detail'),))
 def cmd_help(ctx: CLIContext, command=""):
     if command:
         _help_detail(command)
         return
-    print("\nPawchive Downloader")
-    print("  syntax:  command:key=value,key=value   (or:  command value)")
-    print("  a unique prefix works ('hist' → history); Tab completes names")
+    print("\nPawchive Downloader   ·   command:key=value,key=value   (or: command value)")
+    print("A unique prefix works ('hist' → history); Tab completes; 'help <cmd>' for one.")
 
     group = None
     for cmd in _REGISTRY:
         if cmd.group != group:
             group = cmd.group
-            print(f"\n  {group}")
-        print(f"    {_help_row(cmd)}")
-        print(f"      {cmd.summary}")
-    print("\n  'help <command>' shows a command's parameter types and defaults.")
+            print(f"\n{group}")
+        name = cmd.name + (f" | {' | '.join(cmd.aliases)}" if cmd.aliases else "")
+        print(f"  {name}")
+        line = f"      {cmd.summary}"
+        if cmd.params:
+            line += f"   ·   {_param_spec(cmd)}"
+        print(line)
 
 
 def _help_detail(name: str):
@@ -1163,14 +1163,14 @@ def _help_detail(name: str):
     if cmd.aliases:
         print(f"  aliases: {', '.join(cmd.aliases)}")
     if not cmd.params:
-        print("  takes no parameters")
+        print("  no parameters")
         return
     print(f"  usage: {cmd.signature()}")
     name_w = max(len(p.name) for p in cmd.params)
-    kind_w = max(len(p.kind) for p in cmd.params)
+    val_w = max(len(p.values()) for p in cmd.params)
     for p in cmd.params:
-        default = f" (default {p.default!r})" if p.default not in ('', None) else ""
-        print(f"    {p.name:<{name_w}}  {p.kind:<{kind_w}}  {p.help}{default}")
+        default = f"  (default {p.default!r})" if p.default not in ('', None) else ""
+        print(f"    {p.name:<{name_w}}  {p.values():<{val_w}}  {p.help}{default}")
 
 
 @_cmd('clear', 'SESSION', 'Clear the screen')
