@@ -236,7 +236,7 @@ def cmd_add(ctx: CLIContext):
 
 
 @_cmd('remove', 'CREATORS', 'Stop tracking a creator', params=(_ARTIST,))
-def cmd_remove(ctx: CLIContext, artist=""):
+def cmd_remove(ctx: CLIContext, artist):
     artist = select_artist(ctx, artist)
     if not artist:
         return
@@ -248,7 +248,7 @@ def cmd_remove(ctx: CLIContext, artist=""):
 
 @_cmd('info', 'CREATORS', "Creator details & progress",
       params=(_ARTIST,))
-def cmd_info(ctx: CLIContext, artist=""):
+def cmd_info(ctx: CLIContext, artist):
     artist = select_artist(ctx, artist)
     if not artist:
         return
@@ -282,22 +282,22 @@ def _toggle(ctx: CLIContext, query: str, field: str, value: bool, label: str):
 
 
 @_cmd('ignore', 'CREATORS', 'Hide a creator (skips downloads)', params=(_ARTIST,))
-def cmd_ignore(ctx, artist=""):
+def cmd_ignore(ctx, artist):
     _toggle(ctx, artist, 'ignore', True, 'ignored')
 
 
 @_cmd('unignore', 'CREATORS', 'Unhide a creator', params=(_ARTIST,))
-def cmd_unignore(ctx, artist=""):
+def cmd_unignore(ctx, artist):
     _toggle(ctx, artist, 'ignore', False, 'active')
 
 
 @_cmd('complete', 'CREATORS', 'Mark a creator finished', params=(_ARTIST,))
-def cmd_complete(ctx, artist=""):
+def cmd_complete(ctx, artist):
     _toggle(ctx, artist, 'completed', True, 'completed')
 
 
 @_cmd('uncomplete', 'CREATORS', 'Mark a creator active again', params=(_ARTIST,))
-def cmd_uncomplete(ctx, artist=""):
+def cmd_uncomplete(ctx, artist):
     _toggle(ctx, artist, 'completed', False, 'active')
 
 
@@ -336,7 +336,7 @@ def cmd_uncomplete_all(ctx):
 
 @_cmd('ignore-inactive', 'CREATORS', 'Ignore creators idle for N months',
       params=(Param('months', 'int', 6, 'idle months'),))
-def cmd_ignore_inactive(ctx: CLIContext, months=6):
+def cmd_ignore_inactive(ctx: CLIContext, months):
     cutoff = (datetime.now() - timedelta(days=months * 30)).isoformat()
     stale = [a for a in get_artists(ctx, only_active=True)
              if (a.last_date or "") and a.last_date < cutoff]
@@ -370,34 +370,34 @@ def _show_list(ctx: CLIContext, predicate, sort_by, service, label):
 
 
 @_cmd('list', 'BROWSE', 'Active creators', params=_LISTING, aliases=('ls',))
-def cmd_list(ctx, sort_by="name", service=""):
+def cmd_list(ctx, sort_by, service):
     _show_list(ctx, _is_active, sort_by, service, "active artists")
 
 
 @_cmd('list-all', 'BROWSE', 'Everything, incl. ignored & finished',
       params=_LISTING, aliases=('la',))
-def cmd_list_all(ctx, sort_by="name", service=""):
+def cmd_list_all(ctx, sort_by, service):
     _show_list(ctx, None, sort_by, service, "artists")
 
 
 @_cmd('list-ignored', 'BROWSE', 'Ignored creators only', params=_LISTING)
-def cmd_list_ignored(ctx, sort_by="name", service=""):
+def cmd_list_ignored(ctx, sort_by, service):
     _show_list(ctx, lambda a: a.ignore, sort_by, service, "ignored artists")
 
 
 @_cmd('list-completed', 'BROWSE', 'Finished creators only', params=_LISTING)
-def cmd_list_completed(ctx, sort_by="name", service=""):
+def cmd_list_completed(ctx, sort_by, service):
     _show_list(ctx, lambda a: a.completed, sort_by, service, "completed artists")
 
 
 @_cmd('list-pending', 'BROWSE', 'Active creators with pending posts', params=_LISTING)
-def cmd_list_pending(ctx, sort_by="name", service=""):
+def cmd_list_pending(ctx, sort_by, service):
     _show_list(ctx, lambda a: _is_active(a) and _has_work(ctx, a),
                sort_by, service, "artists with pending work")
 
 
 @_cmd('list-failed', 'BROWSE', 'Creators with failed files', params=_LISTING)
-def cmd_list_failed(ctx, sort_by="name", service=""):
+def cmd_list_failed(ctx, sort_by, service):
     _show_list(ctx, lambda a: ctx.cache.stats(a.id)['failed'] > 0,
                sort_by, service, "artists with failed files")
 
@@ -407,7 +407,7 @@ def cmd_list_failed(ctx, sort_by="name", service=""):
 # ============================================================================
 
 @_cmd('download', 'DOWNLOAD', "Download one creator's pending posts", params=(_ARTIST,))
-def cmd_download(ctx: CLIContext, artist=""):
+def cmd_download(ctx: CLIContext, artist):
     artist = select_artist(ctx, artist)
     if not artist:
         return
@@ -456,7 +456,7 @@ def _ask_date(value: str, label: str) -> Optional[str]:
 
 @_cmd('download-after', 'DOWNLOAD', 'Only posts published after a date',
       params=(_ARTIST, Param('date', 'date', '', 'after this date')))
-def cmd_download_after(ctx: CLIContext, artist="", date=""):
+def cmd_download_after(ctx: CLIContext, artist, date):
     artist = select_artist(ctx, artist)
     if not artist:
         return
@@ -467,7 +467,7 @@ def cmd_download_after(ctx: CLIContext, artist="", date=""):
 
 @_cmd('download-before', 'DOWNLOAD', 'Only posts published up to a date',
       params=(_ARTIST, Param('date', 'date', '', 'up to this date')))
-def cmd_download_before(ctx: CLIContext, artist="", date=""):
+def cmd_download_before(ctx: CLIContext, artist, date):
     artist = select_artist(ctx, artist)
     if not artist:
         return
@@ -479,7 +479,7 @@ def cmd_download_before(ctx: CLIContext, artist="", date=""):
 @_cmd('download-between', 'DOWNLOAD', 'Only posts within a date range',
       params=(_ARTIST, Param('after', 'date', '', 'range start'),
               Param('before', 'date', '', 'range end')))
-def cmd_download_between(ctx: CLIContext, artist="", after="", before=""):
+def cmd_download_between(ctx: CLIContext, artist, after, before):
     artist = select_artist(ctx, artist)
     if not artist:
         return
@@ -500,7 +500,7 @@ def cmd_download_between(ctx: CLIContext, artist="", after="", before=""):
 
 @_cmd('sync', 'SYNC', "Refresh cached post list (no files)",
       params=(_ARTIST, _DEEP))
-def cmd_sync(ctx: CLIContext, artist="", deep=False):
+def cmd_sync(ctx: CLIContext, artist, deep):
     artist = select_artist(ctx, artist)
     if not artist:
         return
@@ -513,7 +513,7 @@ def cmd_sync(ctx: CLIContext, artist="", deep=False):
 
 
 @_cmd('sync-all', 'SYNC', 'Refresh all cached post lists', params=(_DEEP,))
-def cmd_sync_all(ctx: CLIContext, deep=False):
+def cmd_sync_all(ctx: CLIContext, deep):
     artists = get_artists(ctx, only_active=True)
     print(f"Syncing {len(artists)} creators" + (" (deep)" if deep else "") + "...")
     total_new = total_edited = 0
@@ -533,7 +533,7 @@ def cmd_sync_all(ctx: CLIContext, deep=False):
 # ============================================================================
 
 @_cmd('undone', 'INSPECT', "Show one creator's remaining posts", params=(_ARTIST,))
-def cmd_undone(ctx: CLIContext, artist=""):
+def cmd_undone(ctx: CLIContext, artist):
     artist = select_artist(ctx, artist)
     if not artist:
         return
@@ -566,8 +566,8 @@ def _links_filter(ctx: CLIContext, filtered: bool):
 
 @_cmd('links', 'INSPECT', "A creator's external URLs",
       params=(_ARTIST, *_LINKS_PARAMS))
-def cmd_links(ctx: CLIContext, artist="", match="", unique=True, filtered=True,
-              group="", details=False):
+def cmd_links(ctx: CLIContext, artist, match, unique, filtered,
+              group, details):
     keys = _group_keys(group)  # validate before any work
     artist = select_artist(ctx, artist)
     if not artist:
@@ -579,8 +579,8 @@ def cmd_links(ctx: CLIContext, artist="", match="", unique=True, filtered=True,
 
 
 @_cmd('links-all', 'INSPECT', "All creators' external URLs", params=_LINKS_PARAMS)
-def cmd_links_all(ctx: CLIContext, match="", unique=True, filtered=True,
-                  group="", details=False):
+def cmd_links_all(ctx: CLIContext, match, unique, filtered,
+                  group, details):
     keys = _group_keys(group)  # validate before any work
     flt = _links_filter(ctx, filtered)
     all_links = []
@@ -592,7 +592,7 @@ def cmd_links_all(ctx: CLIContext, match="", unique=True, filtered=True,
 
 @_cmd('links-filter', 'INSPECT', 'Show / adjust the links filter',
       params=(Param('cutoff', 'date', '', 'set reviewed_before'),))
-def cmd_links_filter(ctx: CLIContext, cutoff=""):
+def cmd_links_filter(ctx: CLIContext, cutoff):
     config = ctx.storage.load_config()
     lf = dict(config.links_filter or {})
     if cutoff:
@@ -622,7 +622,7 @@ def cmd_links_filter(ctx: CLIContext, cutoff=""):
 
 @_cmd('links-reviewed', 'INSPECT', "Mark a creator's links reviewed",
       params=(_ARTIST, Param('remove', 'bool', False, 'unmark instead')))
-def cmd_links_reviewed(ctx: CLIContext, artist="", remove=False):
+def cmd_links_reviewed(ctx: CLIContext, artist, remove):
     artist = select_artist(ctx, artist)
     if not artist:
         return
@@ -759,7 +759,7 @@ def _print_links(ctx: CLIContext, links, keys=None, details=False):
 
 @_cmd('download-gdrive', 'INSPECT', 'Download found Google Drive links (needs gdown)',
       params=(Param('match', 'str', '', 'extra URL regex'),))
-def cmd_download_gdrive(ctx: CLIContext, match=""):
+def cmd_download_gdrive(ctx: CLIContext, match):
     all_links = []
     for a in get_artists(ctx):
         all_links.extend(ctx.links_extractor.extract_from_artist(
@@ -784,7 +784,7 @@ _AFTER_DATE = Param('after_date', 'date', '', 'only after this date')
 
 @_cmd('reset', 'MAINTAIN', "Mark one creator's posts undone",
       params=(_ARTIST, _AFTER_DATE))
-def cmd_reset(ctx: CLIContext, artist="", after_date=""):
+def cmd_reset(ctx: CLIContext, artist, after_date):
     artist = select_artist(ctx, artist)
     if not artist:
         return
@@ -793,7 +793,7 @@ def cmd_reset(ctx: CLIContext, artist="", after_date=""):
 
 
 @_cmd('reset-all', 'MAINTAIN', "Mark every creator's posts undone", params=(_AFTER_DATE,))
-def cmd_reset_all(ctx: CLIContext, after_date=""):
+def cmd_reset_all(ctx: CLIContext, after_date):
     if not confirm("Reset posts for ALL artists?"):
         return
     total = sum(ctx.cache.reset_after_date(a.id, after_date or None)
@@ -803,7 +803,7 @@ def cmd_reset_all(ctx: CLIContext, after_date=""):
 
 @_cmd('reset-conflicts', 'MAINTAIN', 'Undo posts whose output paths collide',
       params=(_ARTIST,))
-def cmd_reset_conflicts(ctx: CLIContext, artist=""):
+def cmd_reset_conflicts(ctx: CLIContext, artist):
     artist = select_artist(ctx, artist)
     if not artist:
         return
@@ -818,7 +818,7 @@ def cmd_reset_conflicts_all(ctx: CLIContext):
 
 
 @_cmd('dedupe', 'MAINTAIN', 'Remove duplicate cached posts', params=(_ARTIST,))
-def cmd_dedupe(ctx: CLIContext, artist=""):
+def cmd_dedupe(ctx: CLIContext, artist):
     artist = select_artist(ctx, artist)
     if not artist:
         return
@@ -845,7 +845,7 @@ def _print_conflicts(conflicts):
 
 @_cmd('validate', 'MAINTAIN', "Report one creator's colliding output paths",
       params=(_ARTIST,))
-def cmd_validate(ctx: CLIContext, artist=""):
+def cmd_validate(ctx: CLIContext, artist):
     artist = select_artist(ctx, artist)
     if not artist:
         return
@@ -864,7 +864,7 @@ _CLEAN_PARAMS = (Param('quarantine', 'str', '_invalid', 'target folder'),
 
 @_cmd('clean-folders', 'MAINTAIN', 'Quarantine orphan download folders',
       params=(_ARTIST, *_CLEAN_PARAMS))
-def cmd_clean_folders(ctx: CLIContext, artist="", quarantine="_invalid", dry=True):
+def cmd_clean_folders(ctx: CLIContext, artist, quarantine, dry):
     artist = select_artist(ctx, artist)
     if not artist:
         return
@@ -873,7 +873,7 @@ def cmd_clean_folders(ctx: CLIContext, artist="", quarantine="_invalid", dry=Tru
 
 @_cmd('clean-folders-all', 'MAINTAIN', 'Quarantine orphan folders for every active creator',
       params=_CLEAN_PARAMS)
-def cmd_clean_folders_all(ctx: CLIContext, quarantine="_invalid", dry=True):
+def cmd_clean_folders_all(ctx: CLIContext, quarantine, dry):
     for a in get_artists(ctx, only_active=True):
         _clean_one(ctx, a, quarantine, dry)
 
@@ -938,13 +938,13 @@ def _run_migration(ctx: CLIContext, kind: str, query: str):
 
 @_cmd('relayout-posts', 'MAINTAIN', 'Move post folders to match new templates',
       params=(_ARTIST,))
-def cmd_relayout_posts(ctx: CLIContext, artist=""):
+def cmd_relayout_posts(ctx: CLIContext, artist):
     _run_migration(ctx, "post", artist)
 
 
 @_cmd('relayout-files', 'MAINTAIN', 'Rename files to match new templates',
       params=(_ARTIST,))
-def cmd_relayout_files(ctx: CLIContext, artist=""):
+def cmd_relayout_files(ctx: CLIContext, artist):
     _run_migration(ctx, "file", artist)
 
 
@@ -981,7 +981,7 @@ def _task_label(ctx: CLIContext, task) -> str:
 
 @_cmd('cancel', 'TASKS & CONFIG', 'Cancel one queued or running download',
       params=(Param('artist', 'str', '', 'task id/name (else pick from list)'),))
-def cmd_cancel(ctx: CLIContext, artist=""):
+def cmd_cancel(ctx: CLIContext, artist):
     active = ctx.scheduler.list_active()
     queued = ctx.scheduler.list_queued()
     tasks = [('running', t) for t in active] + [('queued', t) for t in queued]
@@ -1061,7 +1061,7 @@ def cmd_config(ctx: CLIContext):
 
 
 @_cmd('config-artist', 'TASKS & CONFIG', 'Edit per-creator overrides', params=(_ARTIST,))
-def cmd_config_artist(ctx: CLIContext, artist=""):
+def cmd_config_artist(ctx: CLIContext, artist):
     artist = select_artist(ctx, artist)
     if not artist:
         return
@@ -1110,7 +1110,7 @@ def cmd_config_conflicts(ctx: CLIContext):
 
 @_cmd('history', 'SESSION', 'Recent commands',
       params=(Param('limit', 'int', 10, 'entries'),))
-def cmd_history(ctx: CLIContext, limit=10):
+def cmd_history(ctx: CLIContext, limit):
     for r in ctx.storage.get_history(limit):
         mark = "ok " if r.success else "ERR"
         extra = f" {r.params}" if r.params else ""
@@ -1136,7 +1136,7 @@ def _param_spec(cmd) -> str:
 
 @_cmd('help', 'SESSION', 'This overview, or one command in detail',
       params=(Param('command', 'str', '', 'command to detail'),))
-def cmd_help(ctx: CLIContext, command=""):
+def cmd_help(ctx: CLIContext, command):
     if command:
         _help_detail(command)
         return

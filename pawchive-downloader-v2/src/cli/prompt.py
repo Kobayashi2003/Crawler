@@ -49,14 +49,25 @@ if HAS_PROMPT_TOOLKIT:
             pass
 
     class _CommandCompleter(Completer):
-        """Substring match over the hot-reloaded command names and aliases."""
+        """Complete command names before ':', then param names and values after
+        it -- both from the same registry the parser and help read."""
 
         def __init__(self, get_commands: Callable[[], dict]):
             self.get_commands = get_commands
 
         def get_completions(self, document, complete_event):
+            from .registry import CommandError, param_suggestions, resolve
             text = document.text_before_cursor
-            if ':' in text or ' ' in text:  # typing params, not a command name
+            if ':' in text:
+                head, _, rest = text.partition(':')
+                try:
+                    cmd = resolve(self.get_commands(), head.strip())
+                except CommandError:
+                    return
+                for insert, start, display in param_suggestions(cmd, rest):
+                    yield Completion(insert, start_position=start, display=display)
+                return
+            if ' ' in text:  # a bare positional value; nothing to complete
                 return
             low = text.lower()
             for key in sorted(self.get_commands().keys()):

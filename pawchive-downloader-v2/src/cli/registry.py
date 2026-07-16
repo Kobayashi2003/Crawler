@@ -1,16 +1,18 @@
-"""Declarative command registry: one parse/validate/dispatch path for the shell.
+"""Declarative command registry: one parse / validate / bind / dispatch path.
 
-Each command is registered with its parameter specs, so input parsing, type
-validation, completion and `help` all read a single source of truth. Handlers
-stay plain functions ``handler(ctx, **typed_params)``.
+A command declares its parameters once as `Param` specs; input parsing, type
+coercion, defaults, help and completion all read from them -- a single source of
+truth. Handlers stay plain functions ``handler(ctx, **params)`` and receive a
+complete, already-typed keyword for every declared param.
 
-This module is imported normally (not hot-reloaded), so `Command` instances
-stay type-stable across reloads of the commands module.
+Imported normally (not hot-reloaded), so `Param`/`Command` stay type-stable
+across reloads of the commands module.
 """
 
 from __future__ import annotations
 
 import difflib
+import inspect
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -24,19 +26,77 @@ class ExitShell(Exception):
     """Raised by the `exit` command to leave the prompt loop."""
 
 
+# ==================== Parameter types ====================
+# Each kind is (parse, value-hint, flaggable). `parse` returns the typed value
+# or raises CommandError; `flaggable` allows a bare `:key` (no `=`) as shorthand.
+
+def _parse_str(name: str, raw: str) -> str:
+    return raw
+
+
+def _parse_bool(name: str, raw: str) -> bool:
+    low = raw.lower()
+    if low in ('true', '1', 'yes', 'y', 'on'):
+        return True
+    if low in ('false', '0', 'no', 'n', 'off'):
+        return False
+    raise CommandError(f"'{name}' must be true or false, got '{raw}'.")
+
+
+def _parse_int(name: str, raw: str) -> int:
+    try:
+        return int(raw)
+    except ValueError:
+        raise CommandError(f"'{name}' must be a number, got '{raw}'.")
+
+
+def _parse_date(name: str, raw: str) -> str:
+    try:
+        datetime.fromisoformat(raw)
+    except ValueError:
+        raise CommandError(f"'{name}' must be a date (YYYY-MM-DD or ISO), got '{raw}'.")
+    return raw
+
+
+_TYPES: Dict[str, Tuple[Callable[[str, str], Any], str, bool]] = {
+    'str':  (_parse_str,  '',           False),
+    'bool': (_parse_bool, 'true|false', True),
+    'int':  (_parse_int,  'N',          False),
+    'date': (_parse_date, 'YYYY-MM-DD', False),
+}
+
+
 @dataclass(frozen=True)
 class Param:
     name: str
-    kind: str = 'str'          # str | bool | int | date
+    kind: str = 'str'
     default: Any = ''
     help: str = ''
     choices: Tuple[str, ...] = ()   # allowed values, if a fixed set
 
+    def __post_init__(self):
+        if self.kind not in _TYPES:
+            raise ValueError(f"param '{self.name}': unknown kind '{self.kind}'")
+
+    @property
+    def flaggable(self) -> bool:
+        """True if a bare `:name` (no value) is allowed -- bools only."""
+        return _TYPES[self.kind][2]
+
     def values(self) -> str:
-        """Short hint of accepted values, for help output."""
-        if self.choices:
-            return '|'.join(self.choices)
-        return {'bool': 'true|false', 'date': 'YYYY-MM-DD', 'int': 'N'}.get(self.kind, '')
+        """Short hint of accepted values, for help and completion."""
+        return '|'.join(self.choices) if self.choices else _TYPES[self.kind][1]
+
+    def coerce(self, raw: Optional[str]) -> Any:
+        """Text (or None for a bare flag) -> typed value; raises CommandError."""
+        if raw is None:
+            if self.flaggable:
+                return True
+            raise CommandError(f"'{self.name}' needs a value, e.g. {self.name}=...")
+        value = _TYPES[self.kind][0](self.name, raw)
+        if self.choices and value not in self.choices:
+            raise CommandError(f"'{self.name}' must be one of {self.values()}, got '{raw}'.")
+        return value
 
 
 @dataclass(frozen=True)
@@ -49,16 +109,48 @@ class Command:
     aliases: Tuple[str, ...] = ()
 
     def signature(self) -> str:
-        """`name:key=,key=` hint for help and error messages."""
+        """`name:key=,key=` usage hint for help and error messages."""
         if not self.params:
             return self.name
         return f"{self.name}:" + ",".join(f"{p.name}=" for p in self.params)
 
+    def bind(self, positional: str, pairs: Dict[str, Optional[str]]) -> Dict[str, Any]:
+        """Merge parsed input onto the declared defaults; returns typed kwargs
+        for every param, so handlers never need their own defaults."""
+        if (positional or pairs) and not self.params:
+            raise CommandError(f"'{self.name}' takes no parameters.")
+
+        by_name = {p.name: p for p in self.params}
+        values = {p.name: p.default for p in self.params}
+        seen: set = set()
+
+        if positional:
+            first = self.params[0]
+            values[first.name] = first.coerce(positional)
+            seen.add(first.name)
+
+        for key, raw in pairs.items():
+            param = by_name.get(key)
+            if param is None:
+                raise CommandError(
+                    f"Unknown parameter '{key}' for '{self.name}'. Usage: {self.signature()}")
+            if key in seen:
+                raise CommandError(f"Parameter '{key}' given twice.")
+            values[key] = param.coerce(raw)
+            seen.add(key)
+        return values
+
 
 def build_map(commands: List[Command]) -> Dict[str, Command]:
-    """Name and alias -> Command. Registration order is preserved for help."""
+    """Name and alias -> Command. Registration order is preserved for help.
+
+    Each handler's signature is checked against its declared params, so a rename
+    that touches only one side fails loudly at load (and on every hot-reload),
+    not at call time.
+    """
     out: Dict[str, Command] = {}
     for cmd in commands:
+        _check_signature(cmd)
         for key in (cmd.name, *cmd.aliases):
             if key in out:
                 raise ValueError(f"duplicate command name: {key}")
@@ -66,15 +158,23 @@ def build_map(commands: List[Command]) -> Dict[str, Command]:
     return out
 
 
+def _check_signature(cmd: Command):
+    args = [n for n in inspect.signature(cmd.handler).parameters if n != 'ctx']
+    declared = [p.name for p in cmd.params]
+    if args != declared:
+        raise ValueError(
+            f"{cmd.name}: handler args {args} != declared params {declared}")
+
+
 # ==================== Input parsing ====================
 
 def parse_input(text: str) -> Tuple[str, str, Dict[str, Optional[str]]]:
-    """Split one input line into `(name, positional, key=value pairs)`.
+    """Split one input line into `(name, positional, pairs)`.
 
     Canonical form is ``command:key=value,key=value``; a bare remainder after a
-    space (``help sync``) is returned as `positional` and mapped to the
-    command's first parameter. A bare ``key`` with no ``=`` maps to ``None`` --
-    a flag whose meaning depends on the param type (True for a bool).
+    space (``help sync``) is returned as `positional` and bound to the command's
+    first parameter. A bare ``key`` with no ``=`` maps to ``None`` -- a flag
+    whose meaning depends on the param type (True for a bool).
     """
     text = text.strip()
     head, colon, rest = text.partition(':')
@@ -114,61 +214,30 @@ def resolve(command_map: Dict[str, Command], name: str) -> Command:
     raise CommandError(f"Unknown command '{name}'.{hint}")
 
 
-# ==================== Validation ====================
+# ==================== Completion ====================
 
-_TRUE, _FALSE = {'true', '1', 'yes', 'y', 'on'}, {'false', '0', 'no', 'n', 'off'}
+def param_suggestions(cmd: Command, rest: str) -> List[Tuple[str, int, str]]:
+    """Completions for the param fragment after ':'. `rest` is the text between
+    the colon and the cursor. Returns `(insert, start_position, display)` tuples;
+    `start_position` is negative, the length of text to replace.
+    """
+    if not cmd.params:
+        return []
+    segment = rest.split(',')[-1].lstrip()
 
-
-def _coerce(param: Param, raw: Optional[str]) -> Any:
-    if raw is None:
-        # Bare flag (`:deep`): only a bool takes no value, and means true.
-        if param.kind == 'bool':
-            return True
-        raise CommandError(f"'{param.name}' needs a value, e.g. {param.name}=...")
-    if param.kind == 'bool':
-        low = raw.lower()
-        if low in _TRUE:
-            return True
-        if low in _FALSE:
-            return False
-        raise CommandError(f"'{param.name}' must be true or false, got '{raw}'.")
-    if param.kind == 'int':
-        try:
-            return int(raw)
-        except ValueError:
-            raise CommandError(f"'{param.name}' must be a number, got '{raw}'.")
-    if param.kind == 'date':
-        try:
-            datetime.fromisoformat(raw)
-        except ValueError:
-            raise CommandError(
-                f"'{param.name}' must be a date (YYYY-MM-DD or ISO), got '{raw}'.")
-        return raw
-    if param.choices and raw not in param.choices:
-        raise CommandError(
-            f"'{param.name}' must be one of {param.values()}, got '{raw}'.")
-    return raw
-
-
-def build_kwargs(cmd: Command, positional: str, pairs: Dict[str, str]) -> Dict[str, Any]:
-    """Validate raw input against the command's params; returns typed kwargs."""
-    if positional and not cmd.params:
-        raise CommandError(f"'{cmd.name}' takes no parameters.")
-    if pairs and not cmd.params:
-        raise CommandError(f"'{cmd.name}' takes no parameters.")
-
-    kwargs: Dict[str, Any] = {}
-    if positional:
-        first = cmd.params[0]
-        kwargs[first.name] = _coerce(first, positional)
-
-    by_name = {p.name: p for p in cmd.params}
-    for key, raw in pairs.items():
-        param = by_name.get(key)
+    if '=' in segment:   # completing a value for key=
+        key, _, partial = segment.partition('=')
+        param = next((p for p in cmd.params if p.name == key.strip()), None)
         if param is None:
-            raise CommandError(
-                f"Unknown parameter '{key}' for '{cmd.name}'. Usage: {cmd.signature()}")
-        if key in kwargs:
-            raise CommandError(f"Parameter '{key}' given twice.")
-        kwargs[key] = _coerce(param, raw)
-    return kwargs
+            return []
+        options = param.choices or (('true', 'false') if param.flaggable else ())
+        return [(o, -len(partial), o) for o in options if o.startswith(partial)]
+
+    used = {kv.partition('=')[0].strip() for kv in rest.split(',')[:-1]}
+    out = []
+    for p in cmd.params:
+        if p.name in used or not p.name.startswith(segment):
+            continue
+        display = f"{p.name}={p.values()}" if p.values() else p.name
+        out.append((p.name, -len(segment), display))
+    return out

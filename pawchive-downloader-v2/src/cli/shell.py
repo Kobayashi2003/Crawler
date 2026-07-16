@@ -12,7 +12,7 @@ import traceback
 from ..common.jsonio import CorruptJSON
 from ..common.naming import human_size
 from .prompt import CLIPromptSession
-from .registry import CommandError, ExitShell, build_kwargs, parse_input, resolve
+from .registry import CommandError, ExitShell, parse_input, resolve
 
 
 def run(ctx, get_commands, logger):
@@ -39,7 +39,7 @@ def _dispatch(ctx, command_map, text, logger):
         cmd = resolve(command_map, name)
         if cmd.name != name and name not in cmd.aliases:
             print(f"-> {cmd.name}")
-        kwargs = build_kwargs(cmd, positional, pairs)
+        kwargs = cmd.bind(positional, pairs)
     except CommandError as e:
         print(e)
         return
