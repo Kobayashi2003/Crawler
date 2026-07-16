@@ -73,5 +73,3 @@ Completeness is prioritized over speed. Files are written to a temp file,
 size-checked, then placed with an atomic `os.replace`; failures are recorded so
 the post stays pending and the next run retries it. Re-running is always safe —
 finished posts are never re-fetched.
-
-Migrating from the archived kemono-downloader? Run `python migrate_from_kemono.py`.
