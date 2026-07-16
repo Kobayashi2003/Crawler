@@ -73,6 +73,8 @@ check("choices hint", Param("s", "str", choices=("a", "b")).values() == "a|b")
 check("bool hint", Param("b", "bool").values() == "true|false")
 check("date hint", Param("d", "date").values() == "YYYY-MM-DD")
 check("str hint is empty", Param("s", "str").values() == "")
+check("explicit hint shows for a free str", Param("g", "str", hint="artist/domain").values() == "artist/domain")
+check("choices win over hint", Param("s", "str", choices=("a",), hint="x").values() == "a")
 
 # --- completion suggests param names, then a param's values.
 names = [insert for insert, _s, _d in param_suggestions(cmd, "")]

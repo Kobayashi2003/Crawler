@@ -73,6 +73,7 @@ class Param:
     default: Any = ''
     help: str = ''
     choices: Tuple[str, ...] = ()   # allowed values, if a fixed set
+    hint: str = ''                  # value placeholder for a free-form param
 
     def __post_init__(self):
         if self.kind not in _TYPES:
@@ -84,8 +85,11 @@ class Param:
         return _TYPES[self.kind][2]
 
     def values(self) -> str:
-        """Short hint of accepted values, for help and completion."""
-        return '|'.join(self.choices) if self.choices else _TYPES[self.kind][1]
+        """Short hint of accepted values, for help and completion:
+        the fixed choices, else an explicit placeholder, else the kind's own."""
+        if self.choices:
+            return '|'.join(self.choices)
+        return self.hint or _TYPES[self.kind][1]
 
     def coerce(self, raw: Optional[str]) -> Any:
         """Text (or None for a bare flag) -> typed value; raises CommandError."""

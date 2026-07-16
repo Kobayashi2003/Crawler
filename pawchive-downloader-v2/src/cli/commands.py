@@ -57,7 +57,7 @@ def _cmd(name, group, summary, params=(), aliases=()):
 
 
 # Shared parameter specs.
-_ARTIST = Param('artist', 'str', '', 'id, name or alias (else prompted)')
+_ARTIST = Param('artist', 'str', '', 'id, name or alias (else prompted)', hint='id/name')
 _LISTING = (Param('sort_by', 'str', 'name', 'order',
                   choices=('name', 'recent', 'posts', 'service')),
             Param('service', 'str', '', 'only this service'))
@@ -547,10 +547,10 @@ def cmd_undone(ctx: CLIContext, artist):
         print(f"  [{(p.published or '')[:10]}] [{p.id}] {p.title[:60]}{flag}")
 
 
-_LINKS_PARAMS = (Param('match', 'str', '', 'URL regex filter'),
+_LINKS_PARAMS = (Param('match', 'str', '', 'URL regex filter', hint='regex'),
                  Param('unique', 'bool', True, 'drop repeats'),
                  Param('filtered', 'bool', True, 'apply links_filter'),
-                 Param('group', 'str', '', 'nest by artist/domain (e.g. artist/domain)'),
+                 Param('group', 'str', '', 'nest levels, / = order', hint='artist/domain'),
                  Param('details', 'bool', False, 'show post title, id, date'))
 
 
@@ -758,7 +758,7 @@ def _print_links(ctx: CLIContext, links, keys=None, details=False):
 
 
 @_cmd('download-gdrive', 'INSPECT', 'Download found Google Drive links (needs gdown)',
-      params=(Param('match', 'str', '', 'extra URL regex'),))
+      params=(Param('match', 'str', '', 'extra URL regex', hint='regex'),))
 def cmd_download_gdrive(ctx: CLIContext, match):
     all_links = []
     for a in get_artists(ctx):
