@@ -35,10 +35,12 @@ Enter `help` to see all commands, or `help <command>` for one. Basic workflow:
 
 ```bash
 > list:sort_by=recent,service=fanbox
-> sync:artist=hane,deep=true          # deep also re-flags edited posts
-> links-all:group=artist/domain,details=true
+> sync:artist=hane,deep                # a bare bool flag means =true
+> links-all:group=artist/domain,details
 > reset:after_date=2025-01-01
 ```
+
+A boolean parameter given with no value is `true` (`:deep` ≡ `:deep=true`).
 
 `links` / `links-all` honor the optional `links_filter` in `data/config.json`
 (`allowed_domains`, `reviewed_artists`, `reviewed_before`); `:filtered=false`

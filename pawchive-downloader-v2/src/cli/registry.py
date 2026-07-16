@@ -13,7 +13,7 @@ from __future__ import annotations
 import difflib
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 class CommandError(Exception):
@@ -68,12 +68,13 @@ def build_map(commands: List[Command]) -> Dict[str, Command]:
 
 # ==================== Input parsing ====================
 
-def parse_input(text: str) -> Tuple[str, str, Dict[str, str]]:
+def parse_input(text: str) -> Tuple[str, str, Dict[str, Optional[str]]]:
     """Split one input line into `(name, positional, key=value pairs)`.
 
     Canonical form is ``command:key=value,key=value``; a bare remainder after a
     space (``help sync``) is returned as `positional` and mapped to the
-    command's first parameter.
+    command's first parameter. A bare ``key`` with no ``=`` maps to ``None`` --
+    a flag whose meaning depends on the param type (True for a bool).
     """
     text = text.strip()
     head, colon, rest = text.partition(':')
@@ -81,15 +82,16 @@ def parse_input(text: str) -> Tuple[str, str, Dict[str, str]]:
         name, _, positional = text.partition(' ')
         return name.strip(), positional.strip(), {}
 
-    pairs: Dict[str, str] = {}
+    pairs: Dict[str, Optional[str]] = {}
     for part in rest.split(','):
         part = part.strip()
         if not part:
             continue
         key, eq, value = part.partition('=')
-        if not eq or not key.strip():
+        key = key.strip()
+        if not key:
             raise CommandError(f"Bad parameter '{part}': use key=value.")
-        pairs[key.strip()] = value.strip()
+        pairs[key] = value.strip() if eq else None
     return head.strip(), '', pairs
 
 
@@ -117,7 +119,12 @@ def resolve(command_map: Dict[str, Command], name: str) -> Command:
 _TRUE, _FALSE = {'true', '1', 'yes', 'y', 'on'}, {'false', '0', 'no', 'n', 'off'}
 
 
-def _coerce(param: Param, raw: str) -> Any:
+def _coerce(param: Param, raw: Optional[str]) -> Any:
+    if raw is None:
+        # Bare flag (`:deep`): only a bool takes no value, and means true.
+        if param.kind == 'bool':
+            return True
+        raise CommandError(f"'{param.name}' needs a value, e.g. {param.name}=...")
     if param.kind == 'bool':
         low = raw.lower()
         if low in _TRUE:

@@ -21,6 +21,7 @@ SCRIPTS = [
     "flap_test.py",
     "links_test.py",
     "notfound_test.py",
+    "parse_test.py",
     "refresh_test.py",
     "safety_test.py",
 ]
