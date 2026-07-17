@@ -358,15 +358,18 @@ def cmd_ignore_inactive(ctx: CLIContext, months):
 # Browse
 # ============================================================================
 
-def _show_list(ctx: CLIContext, predicate, sort_by, service, label):
+def _show_list(ctx: CLIContext, predicate, sort_by, service, label) -> List[Artist]:
+    """Print the artist table; returns the listed artists, for callers that
+    print more about them afterwards."""
     artists = get_artists(ctx, service=service, sort_by=sort_by)
     if predicate:
         artists = [a for a in artists if predicate(a)]
     if not artists:
         print(f"No {label}.")
-        return
+        return []
     print_artist_table(ctx, artists)
     print(f"\nTotal: {len(artists)} {label}")
+    return artists
 
 
 @_cmd('list', 'BROWSE', 'Active creators', params=_LISTING, aliases=('ls',))
@@ -396,10 +399,38 @@ def cmd_list_pending(ctx, sort_by, service):
                sort_by, service, "artists with pending work")
 
 
-@_cmd('list-failed', 'BROWSE', 'Creators with failed files', params=_LISTING)
-def cmd_list_failed(ctx, sort_by, service):
-    _show_list(ctx, lambda a: ctx.cache.stats(a.id)['failed'] > 0,
-               sort_by, service, "artists with failed files")
+_FAILED_LISTING = _LISTING + (Param('details', 'bool', False,
+                                    'also list each failed post, per creator'),)
+
+
+_FILES_SHOWN = 5   # a post can fail 40+ files; name a few, count the rest
+
+
+def _failed_files_summary(names: List[str]) -> str:
+    extra = len(names) - _FILES_SHOWN
+    return ", ".join(names[:_FILES_SHOWN]) + (f" +{extra} more" if extra > 0 else "")
+
+
+def _print_failed_posts(ctx: CLIContext, artist: Artist):
+    """One artist's failed posts, under their own header -- the `details` half
+    of `list-failed`. Two lines per post: the post, then its failed files."""
+    posts = [p for p in ctx.cache.load_posts(artist.id) if p.failed_files]
+    if not posts:
+        return
+    print(f"\n{_c(artist.display_name(), 1)} [{artist.id}]  {len(posts)} failed posts")
+    for p in sorted(posts, key=lambda p: p.published or ''):
+        print(f"  [{(p.published or '')[:10]}] [{p.id}] {p.title[:60]}"
+              f"  {_c(f'[{len(p.failed_files)} failed]', 91)}")
+        print(f"      {_c(_failed_files_summary(p.failed_files), 90)}")
+
+
+@_cmd('list-failed', 'BROWSE', 'Creators with failed files', params=_FAILED_LISTING)
+def cmd_list_failed(ctx, sort_by, service, details):
+    artists = _show_list(ctx, lambda a: ctx.cache.stats(a.id)['failed'] > 0,
+                         sort_by, service, "artists with failed files")
+    if details:
+        for a in artists:
+            _print_failed_posts(ctx, a)
 
 
 # ============================================================================
