@@ -1128,10 +1128,30 @@ def cmd_test(ctx: CLIContext):
         print(f"Plugin test failed: {e}")
 
 
-def _param_spec(cmd) -> str:
-    """`key=val|val, key` -- param names with their value hints, for the overview."""
-    return ", ".join(f"{p.name}={p.values()}" if p.values() else p.name
-                     for p in cmd.params)
+# One-line description of each command group, shown dim after the header.
+_GROUP_TAGLINES = {
+    'CREATORS': 'manage the tracked list',
+    'BROWSE': 'list creators by state',
+    'DOWNLOAD': 'fetch and save files',
+    'SYNC': 'refresh the cached post list (no files)',
+    'INSPECT': 'look at posts and links',
+    'MAINTAIN': 'fix the cache and files',
+    'TASKS & CONFIG': 'the queue and settings',
+    'SESSION': 'the shell itself',
+}
+
+
+def _param_hint(cmd) -> str:
+    """Compact param hint for the overview: `key=values` for params with real
+    choices or a placeholder, a bare name otherwise (so plain bools/ints don't
+    add `true|false`/`N` noise). Full values and defaults live in `help <cmd>`."""
+    return " ".join(f"{p.name}={p.values()}" if (p.choices or p.hint) else p.name
+                    for p in cmd.params)
+
+
+def _cmd_display(cmd) -> str:
+    """Command name plus any aliases, e.g. `list · ls`."""
+    return " · ".join((cmd.name, *cmd.aliases))
 
 
 @_cmd('help', 'SESSION', 'This overview, or one command in detail',
@@ -1140,37 +1160,43 @@ def cmd_help(ctx: CLIContext, command):
     if command:
         _help_detail(command)
         return
-    print("\nPawchive Downloader   ·   command:key=value,key=value   (or: command value)")
-    print("A unique prefix works ('hist' → history); Tab completes; 'help <cmd>' for one.")
+    print(_c("\nPawchive Downloader", '1'))
+    print("  Run a command by name; add params as " + _c(":key=value,key=value", '36')
+          + " (or " + _c("command value", '36') + ").")
+    print(_c("  Unique prefixes and Tab-completion work; 'help <command>' details one.", '2'))
 
+    # One aligned line per command: name column, summary, then a dim param hint.
+    name_w = max(len(_cmd_display(c)) for c in _REGISTRY)
     group = None
     for cmd in _REGISTRY:
         if cmd.group != group:
             group = cmd.group
-            print(f"\n{group}")
-        name = cmd.name + (f" | {' | '.join(cmd.aliases)}" if cmd.aliases else "")
-        print(f"  {name}")
-        line = f"      {cmd.summary}"
-        if cmd.params:
-            line += f"   ·   {_param_spec(cmd)}"
+            tag = _GROUP_TAGLINES.get(group, "")
+            header = _c(group, '1;33') + (_c(f"  {tag}", '2') if tag else "")
+            print(f"\n{header}")
+        name = _cmd_display(cmd).ljust(name_w)
+        line = f"  {_c(name, '36')}  {cmd.summary}"
+        hint = _param_hint(cmd)
+        if hint:
+            line += _c(f"   ·   {hint}", '2')
         print(line)
 
 
 def _help_detail(name: str):
     from .registry import resolve
     cmd = resolve(COMMAND_MAP, name)
-    print(f"\n{cmd.name} — {cmd.summary}")
+    print(f"\n{_c(cmd.name, '1;36')} — {cmd.summary}")
     if cmd.aliases:
-        print(f"  aliases: {', '.join(cmd.aliases)}")
+        print(_c(f"  aliases: {', '.join(cmd.aliases)}", '2'))
     if not cmd.params:
-        print("  no parameters")
+        print(_c("  no parameters", '2'))
         return
-    print(f"  usage: {cmd.signature()}")
+    print(_c(f"  usage: {cmd.signature()}", '2'))
     name_w = max(len(p.name) for p in cmd.params)
     val_w = max(len(p.values()) for p in cmd.params)
     for p in cmd.params:
-        default = f"  (default {p.default!r})" if p.default not in ('', None) else ""
-        print(f"    {p.name:<{name_w}}  {p.values():<{val_w}}  {p.help}{default}")
+        default = _c(f"  (default {p.default!r})", '2') if p.default not in ('', None) else ""
+        print(f"    {_c(p.name.ljust(name_w), '36')}  {p.values():<{val_w}}  {p.help}{default}")
 
 
 @_cmd('clear', 'SESSION', 'Clear the screen')
