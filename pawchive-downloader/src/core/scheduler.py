@@ -2,21 +2,21 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
-from queue import Queue
+from queue import Empty, Queue
 from typing import Dict, List, Optional
 
-from .downloader import Downloader
 from ..common.logger import Logger
+from .downloader import Downloader
 from .models import DownloadTask, TaskStatus, TaskType
 from .storage import Storage
 
 
 class Scheduler:
-    """Runs downloads on a bounded thread pool.
+    """Runs downloads and post-list syncs on a bounded thread pool.
 
-    Tasks arrive either manually (``queue_manual``/``queue_batch``) or from
-    per-artist / global timers checked once a second in a background loop.
-    One artist is never queued twice concurrently.
+    Tasks arrive either manually (``queue_manual``/``queue_batch``/``queue_sync``)
+    or from per-artist / global timers checked once a second in a background loop.
+    One artist is never queued twice concurrently, whatever the task type.
     """
 
     def __init__(self, storage: Storage, downloader: Downloader, logger: Logger,
@@ -70,10 +70,10 @@ class Scheduler:
     def _drain_queue(self, artist_id: Optional[str] = None):
         """Remove one queued task, or all of them. Caller holds the lock."""
         kept = []
-        while not self.queue.empty():
+        while True:
             try:
                 task = self.queue.get_nowait()
-            except Exception:
+            except Empty:
                 break
             if artist_id is not None and task.artist_id != artist_id:
                 kept.append(task)
@@ -133,10 +133,19 @@ class Scheduler:
     # ==================== Queueing ====================
 
     def queue_manual(self, artist_id: str, from_date: str = None, until_date: str = None) -> bool:
-        return self._add(DownloadTask(artist_id, from_date, until_date, TaskType.MANUAL))
+        return self._add(DownloadTask(artist_id, from_date, until_date,
+                                      task_type=TaskType.MANUAL))
 
     def queue_batch(self, artist_ids: List[str]) -> int:
         return sum(self._add(DownloadTask(aid, task_type=TaskType.MANUAL)) for aid in artist_ids)
+
+    def queue_sync(self, artist_id: str, deep: bool = False) -> bool:
+        """Queue a post-list refresh. Shares the one-task-per-artist rule with
+        downloads: both write the same cache, so they must not overlap."""
+        return self._add(DownloadTask(artist_id, deep=deep, task_type=TaskType.SYNC))
+
+    def queue_sync_batch(self, artist_ids: List[str], deep: bool = False) -> int:
+        return sum(self.queue_sync(aid, deep) for aid in artist_ids)
 
     def _add(self, task: DownloadTask) -> bool:
         with self.lock:
@@ -195,7 +204,13 @@ class Scheduler:
             artist = self.storage.get_artist(task.artist_id)
             if not artist:
                 raise Exception(f"Artist {task.artist_id} not found")
-            self.downloader.download_artist(artist, task.from_date, task.until_date)
+            if task.task_type == TaskType.SYNC:
+                # No files: only the cached post list is refreshed. The outcome
+                # goes on the task, since nobody is waiting at the prompt.
+                new, edited = self.downloader.update_posts(artist, detect_edits=task.deep)
+                task.note = f"{new} new" + (f", {edited} edited" if task.deep else "")
+            else:
+                self.downloader.download_artist(artist, task.from_date, task.until_date)
             task.status = TaskStatus.COMPLETED
         except Exception as e:
             task.status = TaskStatus.FAILED

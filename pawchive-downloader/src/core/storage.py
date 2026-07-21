@@ -1,6 +1,6 @@
 import threading
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from ..common import env
 from ..common.jsonio import coerce, read_json, write_json
@@ -12,7 +12,9 @@ class Storage:
 
     Artists live in `artists.json`. As a convenience, any `*.json` files under
     `data/artists/` are also loaded (read-only, deduped by id) so creators can
-    be organised into folders; `artists.json` always wins on conflicts.
+    be organised into folders; `artists.json` always wins on conflicts. That
+    folder layout is also what `group_folders` mirrors into the download tree
+    -- see `artist_groups`.
     """
 
     def __init__(self, data_dir: str = None):
@@ -78,17 +80,19 @@ class Storage:
         with self.lock:
             artists = self._read_primary()
             seen = {a.id for a in artists}
-
-            for path, items in self._read_subdir_files():
-                for item in items:
-                    aid = item.get('id')
-                    if aid and aid not in seen:
-                        artists.append(coerce(Artist, item))
-                        seen.add(aid)
+            for _group, item in self._read_subdir_items():
+                aid = item.get('id')
+                if aid and aid not in seen:
+                    artists.append(coerce(Artist, item))
+                    seen.add(aid)
             return artists
 
-    def _read_subdir_files(self):
-        """(path, artist dicts) for every file under `artists/`.
+    def _read_subdir_items(self):
+        """Every artist dict under `artists/`, with the group path it came from.
+
+        The group is the file's own location relative to `artists/`, minus the
+        `.json`: `artists/絵師/ロリメイン/T0.json` -> `絵師/ロリメイン/T0`. It is
+        what `group_folders` mirrors into the download tree.
 
         A corrupt file raises rather than being skipped: skipping it would drop
         every artist it holds, and `save_artist` would then append a duplicate.
@@ -96,9 +100,32 @@ class Storage:
         if not self.artists_dir.is_dir():
             return
         for path in sorted(self.artists_dir.rglob('*.json')):
+            group = path.relative_to(self.artists_dir).with_suffix('').as_posix()
             content = read_json(path, [])
             items = content if isinstance(content, list) else [content]
-            yield path, [i for i in items if isinstance(i, dict)]
+            for item in items:
+                if isinstance(item, dict):
+                    yield group, item
+
+    def artist_groups(self) -> Dict[str, str]:
+        """`artist_id -> group path`, for `group_folders`.
+
+        Artists in `artists.json` map to `''` (the download root); it wins on
+        conflicts, matching `get_artists`. Callers looping over many artists
+        should read this map once rather than calling `artist_group` per artist.
+        """
+        with self.lock:
+            groups: Dict[str, str] = {}
+            for group, item in self._read_subdir_items():
+                aid = item.get('id')
+                if aid and aid not in groups:
+                    groups[aid] = group
+            for artist in self._read_primary():
+                groups[artist.id] = ""
+            return groups
+
+    def artist_group(self, artist_id: str) -> str:
+        return self.artist_groups().get(artist_id, "")
 
     def get_artist(self, artist_id: str) -> Optional[Artist]:
         return next((a for a in self.get_artists() if a.id == artist_id), None)

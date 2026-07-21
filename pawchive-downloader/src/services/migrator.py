@@ -1,5 +1,7 @@
 from collections import defaultdict
+from dataclasses import replace
 from pathlib import Path
+from typing import Dict, List
 
 from ..core.cache import Cache
 from ..core.formatter import Formatter
@@ -74,6 +76,37 @@ class Migrator:
 
         return self._resolve(MigrationType.FILE, total, mapping, old_to, new_to, skipped)
 
+    def plan_groups(self, artists: List[Artist], config: MigrationConfig,
+                    groups: Dict[str, str]) -> MigrationPlan:
+        """Move whole artist folders so the download tree mirrors `data/artists/`.
+
+        `groups` is `Storage.artist_groups()`: artist_id -> target group ('' =
+        download root). The *current* location is whichever candidate exists on
+        disk -- the ungrouped root or some other group folder -- so this works
+        both for a first run and after a creator is moved between json files.
+        """
+        mapping = {}                          # artist_id -> (old_path, new_path)
+        old_to, new_to = defaultdict(list), defaultdict(list)
+        skipped = []
+        candidates = {g for g in groups.values() if g} | {""}
+
+        for artist in artists:
+            new_path = self._artist_path(artist, replace(config, group=groups.get(artist.id, "")))
+            old_path = next(
+                (p for p in (self._artist_path(artist, replace(config, group=g))
+                             for g in sorted(candidates))
+                 if p != new_path and p.is_dir()), None)
+            if old_path is None:
+                # Already in place, or nothing downloaded for this artist yet.
+                skipped.append((artist.id, "already correct" if new_path.is_dir()
+                                else "source missing"))
+                continue
+            mapping[artist.id] = (old_path, new_path)
+            old_to[str(old_path)].append(artist.id)
+            new_to[str(new_path)].append(artist.id)
+
+        return self._resolve(MigrationType.ARTIST, len(artists), mapping, old_to, new_to, skipped)
+
     def _resolve(self, kind, total, mapping, old_to, new_to, skipped) -> MigrationPlan:
         """Turn raw mappings into a plan, excluding conflicting/unsafe moves."""
         conflicts, bad = [], set()
@@ -113,6 +146,9 @@ class Migrator:
     # ==================== Helpers ====================
 
     def _post_path(self, artist: Artist, post: Post, config: MigrationConfig) -> Path:
-        artist_folder = Formatter.artist_folder(artist, config.artist_folder_template)
         post_folder = Formatter.post_folder(post, config.post_folder_template, config.date_format)
-        return Path(config.download_dir) / artist_folder / post_folder
+        return self._artist_path(artist, config) / post_folder
+
+    def _artist_path(self, artist: Artist, config: MigrationConfig) -> Path:
+        return Formatter.artist_dir(config.download_dir, artist,
+                                    config.artist_folder_template, config.group)

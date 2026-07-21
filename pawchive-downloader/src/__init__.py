@@ -1,9 +1,9 @@
 """Pawchive downloader.
 
-    common/    generic helpers (logging, naming, backoff, hot reload)
+    common/    generic helpers (logging, naming, backoff, hot reload, progress)
     core/      models + the fetch -> cache -> download pipeline
     services/  optional features built on core (migrate, validate, links)
-    cli/       command handlers and the prompt session
+    cli/       command registry, handlers, shell loop and prompt session
     plugins/   user-editable, hot-reloaded plugin files
 """
 

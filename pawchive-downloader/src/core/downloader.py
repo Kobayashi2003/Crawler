@@ -269,15 +269,17 @@ class Downloader:
 
     def _download_posts(self, artist: Artist, posts: List[Post]) -> DownloadResult:
         self.logger.downloader_processing(artist=artist.display_name(), count=len(posts))
-        self._sweep_partials(self._artist_dir(artist))
+        # Resolved once per run, not per post: with `group_folders` on it reads
+        # the artists/ tree, and every post of a run shares the same directory.
+        artist_dir = self._artist_dir(artist)
+        self._sweep_partials(artist_dir)
         downloaded = failed = 0
-        lock = threading.Lock()
 
         def process(post):
             if self.is_cancelled(artist.id):
                 return False
             try:
-                ok = self._download_post(artist, post)
+                ok = self._download_post(artist, post, artist_dir)
                 if ok:
                     self.cache.update_post(artist.id, post.id, done=True, failed_files=[],
                                            content=(post.content or None))
@@ -289,18 +291,17 @@ class Downloader:
         with ThreadPoolExecutor(max_workers=self.config.max_concurrent_posts) as executor:
             futures = [executor.submit(process, p) for p in posts]
             for future in as_completed(futures):
-                with lock:
-                    if future.result():
-                        downloaded += 1
-                    else:
-                        failed += 1
+                if future.result():
+                    downloaded += 1
+                else:
+                    failed += 1
 
         self.logger.downloader_completed(
             artist=artist.display_name(), succeeded=downloaded, failed=failed)
         return DownloadResult(artist.id, success=(failed == 0),
                               posts_downloaded=downloaded, posts_failed=failed)
 
-    def _download_post(self, artist: Artist, post: Post) -> bool:
+    def _download_post(self, artist: Artist, post: Post, artist_dir: Path) -> bool:
         cv = lambda k: get_config_value(artist, self.config, k)
         save_content = cv('save_content')
 
@@ -314,7 +315,7 @@ class Downloader:
         if not files and not unusable and not cv('save_empty_posts') and not save_content:
             return True
 
-        save_dir = (self._artist_dir(artist)
+        save_dir = (artist_dir
                     / Formatter.post_folder(post, cv('post_folder_template'), cv('date_format')))
         save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -333,7 +334,6 @@ class Downloader:
             cv('rename_images_only'), self.config.image_extensions))
 
         failed_files: List[str] = list(unusable)
-        lock = threading.Lock()
 
         def dl(pair):
             file, name = pair
@@ -354,8 +354,7 @@ class Downloader:
             for future in as_completed(futures):
                 ok, name = future.result()
                 if not ok:
-                    with lock:
-                        failed_files.append(name)
+                    failed_files.append(name)
 
         if failed_files:
             self.cache.update_post(artist.id, post.id, done=False, failed_files=failed_files)
@@ -366,8 +365,9 @@ class Downloader:
 
     def _artist_dir(self, artist: Artist) -> Path:
         cv = lambda k: get_config_value(artist, self.config, k)
-        return (Path(cv('download_dir'))
-                / Formatter.artist_folder(artist, cv('artist_folder_template')))
+        group = self.storage.artist_group(artist.id) if cv('group_folders') else ""
+        return Formatter.artist_dir(cv('download_dir'), artist,
+                                    cv('artist_folder_template'), group)
 
     def _sweep_partials(self, artist_dir: Path):
         """Delete `.part` files left by an earlier run.

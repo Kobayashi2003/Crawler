@@ -1,20 +1,31 @@
-"""Interactive prompt: command completion + persistent history.
+"""Interactive prompt: completion, persistent history, live status bar.
 
-Degrades to plain `input()` when prompt_toolkit is missing or stdin is not a tty.
+Degrades to plain `input()` when prompt_toolkit is missing or stdin is not a
+tty; in that mode there is no status bar and no stdout patching, so output is
+ordinary line-by-line text with no ANSI escapes.
 """
 
 import sys
-from typing import Callable, List
+from contextlib import nullcontext
+from typing import Callable, List, Optional
 
 try:
     from prompt_toolkit.completion import Completer, Completion
     from prompt_toolkit.history import History
+    from prompt_toolkit.patch_stdout import patch_stdout
     from prompt_toolkit.shortcuts import PromptSession as _PTSession
     HAS_PROMPT_TOOLKIT = True
 except Exception:  # pragma: no cover - optional dependency
     HAS_PROMPT_TOOLKIT = False
     Completer = object  # type: ignore
     History = object    # type: ignore
+
+
+def _is_interactive() -> bool:
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except Exception:
+        return False
 
 
 if HAS_PROMPT_TOOLKIT:
@@ -38,19 +49,30 @@ if HAS_PROMPT_TOOLKIT:
             pass
 
     class _CommandCompleter(Completer):
-        """Substring match over the hot-reloaded command names."""
+        """Complete command names before ':', then param names and values after
+        it -- both from the same registry the parser and help read."""
 
         def __init__(self, get_commands: Callable[[], dict]):
             self.get_commands = get_commands
 
         def get_completions(self, document, complete_event):
+            from .registry import CommandError, param_suggestions, resolve
             text = document.text_before_cursor
-            if ':' in text:  # typing params, not a command name
+            if ':' in text:
+                head, _, rest = text.partition(':')
+                try:
+                    cmd = resolve(self.get_commands(), head.strip())
+                except CommandError:
+                    return
+                for insert, start, display in param_suggestions(cmd, rest):
+                    yield Completion(insert, start_position=start, display=display)
+                return
+            if ' ' in text:  # a bare positional value; nothing to complete
                 return
             low = text.lower()
-            for cmd in sorted(self.get_commands().keys()):
-                if not low or low in cmd:
-                    yield Completion(cmd, start_position=-len(text), display=cmd)
+            for key in sorted(self.get_commands().keys()):
+                if not low or low in key:
+                    yield Completion(key, start_position=-len(text), display=key)
 
     class _ArtistCompleter(Completer):
         """Match artists by index, id, name or alias."""
@@ -76,48 +98,76 @@ if HAS_PROMPT_TOOLKIT:
 
 
 class CLIPromptSession:
-    """Main ``> `` prompt with history and command completion."""
+    """Main ``> `` prompt with history, completion and a bottom status bar.
 
-    def __init__(self, storage, get_commands: Callable[[], dict]):
-        # prompt_toolkit needs an interactive terminal; with piped/redirected
-        # stdin it can't run, so fall back to plain input() there.
-        self._plain = not HAS_PROMPT_TOOLKIT or not _is_interactive()
-        if self._plain:
+    `status_line` (a callable returning one line of text) is rendered as the
+    prompt_toolkit bottom toolbar and refreshed every second, so background
+    download activity is visible without ever disturbing the input line.
+    """
+
+    def __init__(self, storage, get_commands: Callable[[], dict],
+                 status_line: Optional[Callable[[], str]] = None):
+        self.interactive = HAS_PROMPT_TOOLKIT and _is_interactive()
+        if not self.interactive:
             self._session = None
         else:
             self._session = _PTSession(
                 history=_JSONHistory(storage),
                 completer=_CommandCompleter(get_commands),
                 complete_while_typing=False,
+                bottom_toolbar=status_line,
+                refresh_interval=1.0 if status_line else 0.0,
             )
 
+    def patched_stdout(self):
+        """Context manager routing background prints above the input line."""
+        if self.interactive:
+            return patch_stdout(raw=True)
+        return nullcontext()
+
     def prompt(self, message: str = "> ") -> str:
-        if self._plain:
+        if not self.interactive:
             return input(message).strip()
         try:
             return self._session.prompt(message).strip()
         except (EOFError, KeyboardInterrupt):
             raise
         except Exception:
-            self._plain = True  # terminal misbehaving; stay on plain input
+            self.interactive = False  # terminal misbehaving; stay on plain input
             return input(message).strip()
 
 
-def _is_interactive() -> bool:
+def ask(message: str, default: str = "") -> Optional[str]:
+    """One line of sub-prompt input; None means the user cancelled (Ctrl+C/EOF)."""
     try:
-        return sys.stdin.isatty() and sys.stdout.isatty()
-    except Exception:
-        return False
+        return input(message).strip() or default
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.")
+        return None
 
 
-def prompt_artist(message: str, artists) -> str:
-    """Prompt for an artist selection, with completion when available."""
+def confirm(question: str) -> bool:
+    """Require an explicit `yes` before anything destructive."""
+    answer = ask(f"{question} (yes/no): ")
+    if answer is not None and answer.lower() == "yes":
+        return True
+    if answer is not None:
+        print("Cancelled.")
+    return False
+
+
+def prompt_artist(message: str, artists) -> Optional[str]:
+    """Prompt for an artist selection, with completion when available.
+
+    Returns None when cancelled with Ctrl+C/EOF.
+    """
     if not HAS_PROMPT_TOOLKIT or not _is_interactive():
-        return input(message).strip()
+        return ask(message)
     try:
         from prompt_toolkit import prompt as _prompt
         return _prompt(message, completer=_ArtistCompleter(artists)).strip()
     except (EOFError, KeyboardInterrupt):
-        raise
+        print("\nCancelled.")
+        return None
     except Exception:
-        return input(message).strip()
+        return ask(message)

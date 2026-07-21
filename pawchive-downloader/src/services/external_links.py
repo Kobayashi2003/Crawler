@@ -1,13 +1,43 @@
 import re
 import subprocess
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Mapping, Optional
 from urllib.parse import urlparse
 
 from ..core.cache import Cache
 from ..common import env
 from ..common.logger import Logger
 from ..core.models import ExternalLink
+
+
+def make_link_filter(cfg: Mapping) -> Optional[Callable[[ExternalLink], bool]]:
+    """Link predicate built from the `links_filter` config section; None when
+    the section is empty (no filtering).
+
+    Keys, all optional:
+        allowed_domains   keep only links whose domain/url contains one of these
+        reviewed_artists  hide these artists' links -- they were already gone
+                          through -- except posts newer than `reviewed_before`,
+                          so newly published links still surface
+        reviewed_before   the review cutoff date (ISO); without it a reviewed
+                          artist's links are hidden entirely
+    """
+    domains = list(cfg.get('allowed_domains') or [])
+    reviewed = set(cfg.get('reviewed_artists') or [])
+    cutoff = cfg.get('reviewed_before') or ''
+    if not domains and not reviewed:
+        return None
+
+    def allowed(link: ExternalLink) -> bool:
+        if domains and not any(d in link.domain or d in link.url for d in domains):
+            return False
+        if link.artist_id in reviewed:
+            # `edited` moves forward when a post is updated with a new link.
+            date = link.post_edited or link.post_published
+            return bool(cutoff and date and date > cutoff)
+        return True
+
+    return allowed
 
 
 class ExternalLinksExtractor:

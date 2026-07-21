@@ -1,4 +1,6 @@
-import inspect
+"""Entry point: build the object graph, start the scheduler, run the shell."""
+
+import os
 import signal
 import sys
 
@@ -14,30 +16,17 @@ from src import (
     API, Cache, CLIContext, Downloader, ExternalLinksDownloader, ExternalLinksExtractor,
     Logger, Migrator, Notifier, Scheduler, Storage, Validator,
 )
-from src.cli.prompt import CLIPromptSession
+from src.cli import shell
 from src.common.env import load_dotenv
 from src.common.hotreload import dynamic_get
+
+_shutting_down = False
 
 
 def get_commands() -> dict:
     """Load the command map fresh each call so edits to src/cli/commands.py hot-reload."""
     from src.cli.commands import COMMAND_MAP
     return dynamic_get('COMMAND_MAP', 'src/cli/commands.py', default=COMMAND_MAP)
-
-_interrupts = 0
-
-
-def parse_command(text: str):
-    """Split ``command:key=value,key=value`` into (command, params dict)."""
-    if ':' not in text:
-        return text, {}
-    command, _, rest = text.partition(':')
-    params = {}
-    for part in rest.split(','):
-        if '=' in part:
-            key, _, value = part.partition('=')
-            params[key.strip()] = value.strip()
-    return command.strip(), params
 
 
 def initialize():
@@ -60,50 +49,12 @@ def initialize():
     return ctx, scheduler, logger
 
 
-def run_cli(ctx: CLIContext):
-    session = CLIPromptSession(ctx.storage, get_commands)
-    while True:
-        try:
-            text = session.prompt("> ").strip()
-        except EOFError:
-            break
-        if not text:
-            continue
-
-        command, params = parse_command(text)
-        handler = get_commands().get(command)
-        if not handler:
-            print("Unknown command. Type 'help'.")
-            continue
-
-        accepted = set(inspect.signature(handler).parameters) - {'ctx'}
-        kwargs = {k: v for k, v in params.items() if k in accepted}
-        unknown = set(params) - accepted
-        if unknown:
-            print(f"Ignoring unsupported params: {', '.join(unknown)}")
-
-        try:
-            handler(ctx, **kwargs)
-            ctx.storage.add_history(command, success=True, artist_id=ctx._last_artist, params=kwargs)
-        except KeyboardInterrupt:
-            raise
-        except Exception as e:
-            ctx.storage.add_history(command, success=False, artist_id=ctx._last_artist,
-                                    params=kwargs, note=str(e))
-            print(f"Error: {e}")
-        finally:
-            ctx._last_artist = None
-
-
 def main():
     def on_sigint(signum, frame):
-        global _interrupts
-        _interrupts += 1
-        if _interrupts == 1:
-            print("\n\nShutdown requested. Ctrl+C again to force quit.")
-            raise KeyboardInterrupt
-        import os
-        os._exit(1)
+        # A second Ctrl+C during shutdown force-quits a hung teardown.
+        if _shutting_down:
+            os._exit(1)
+        raise KeyboardInterrupt
 
     signal.signal(signal.SIGINT, on_sigint)
 
@@ -113,11 +64,12 @@ def main():
     print("Pawchive Downloader. Type 'help' for commands, 'exit' to quit.")
 
     try:
-        run_cli(ctx)
-    except KeyboardInterrupt:
-        print("\nStopping...")
+        shell.run(ctx, get_commands, logger)
     finally:
-        ctx.downloader.stop()
+        global _shutting_down
+        _shutting_down = True
+        print("Stopping... (Ctrl+C to force quit)")
+        ctx.downloader.abort_requests()  # unblock in-flight HTTP and retry loops
         scheduler.stop()
         logger.app_stopped()
         print("Bye.")

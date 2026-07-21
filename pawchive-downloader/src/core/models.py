@@ -70,6 +70,11 @@ class Config:
     global_timer: Optional[Dict] = None
     global_filter: Dict = field(default_factory=dict)
 
+    # `links`/`links-all` view filter; empty = show everything. Keys:
+    # allowed_domains (keep only these), reviewed_artists (hide, links already
+    # gone through), reviewed_before (posts newer than this still surface).
+    links_filter: Dict = field(default_factory=dict)
+
     # Pawchive has migrated domains before (.st -> .pw).
     api_base: str = "https://pawchive.pw/api/v1"
     file_base: str = "https://file.pawchive.pw"
@@ -112,6 +117,13 @@ class Config:
     post_folder_template: str = "[{published}] {title}"
     file_template: str = "{idx}"
 
+    # Mirror the `data/artists/` folder tree in the download tree: an artist
+    # listed in `artists/絵師/ロリメイン/T0.json` downloads under
+    # `絵師/ロリメイン/T0/`. Artists in `artists.json` stay at the root.
+    # Off by default -- turning it on moves where new downloads land, so
+    # existing libraries need `relayout-groups` to follow.
+    group_folders: bool = False
+
     # Download behaviour
     save_content: bool = True
     save_empty_posts: bool = False
@@ -149,6 +161,7 @@ class DownloadResult:
 class TaskType:
     MANUAL = "manual"
     SCHEDULED = "scheduled"
+    SYNC = "sync"        # refresh the post list only, no files
 
 
 class TaskStatus:
@@ -163,12 +176,14 @@ class DownloadTask:
     artist_id: str
     from_date: Optional[str] = None
     until_date: Optional[str] = None
+    deep: bool = False               # SYNC only: also re-flag edited posts
     task_type: str = TaskType.MANUAL
     status: str = TaskStatus.QUEUED
     created_at: datetime = field(default_factory=datetime.now)
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     error: Optional[str] = None
+    note: str = ""                   # one-line outcome, shown by `tasks`
 
     def __eq__(self, other):
         return isinstance(other, DownloadTask) and (
@@ -200,6 +215,7 @@ class ExternalLink:
 class MigrationType:
     POST = "post"
     FILE = "file"
+    ARTIST = "artist"   # whole artist folder, moved between group folders
 
 
 @dataclass
@@ -212,6 +228,9 @@ class MigrationConfig:
     date_format: str
     rename_images_only: bool
     image_extensions: set
+    # Group folder for this side of the move; '' = the download root. Lets a
+    # plan express "same templates, different group" -- see `plan_groups`.
+    group: str = ""
 
 
 @dataclass

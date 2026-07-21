@@ -10,11 +10,25 @@ _FORMAT_PLUGIN = 'src/plugins/format_plugin.py'
 
 
 class Formatter:
-    """Builds `download_dir / artist_folder / post_folder / file_name`.
+    """Builds `download_dir / [group] / artist_folder / post_folder / file_name`.
 
-    Every segment is sanitized for use as a Windows path component. Each level
-    can be customised by a hot-reloaded plugin.
+    Every segment is sanitized for use as a Windows path component. Each naming
+    level can be customised by a hot-reloaded plugin; `group` is a *location*,
+    not a name, so it sits outside the plugin contract (see `artist_dir`).
     """
+
+    @staticmethod
+    def artist_dir(download_dir: str, artist: Artist, template: str, group: str = "") -> Path:
+        """Where one artist's posts live.
+
+        `group` mirrors the `data/artists/` tree (see `Storage.artist_groups`);
+        empty -- the default, and what `artists.json` yields -- means the
+        download root, leaving paths exactly as they were before grouping.
+        """
+        base = Path(download_dir)
+        if group:
+            base = base / sanitize_path(group)
+        return base / Formatter.artist_folder(artist, template)
 
     @staticmethod
     @plugin_hook('format_artist_plugin', _FORMAT_PLUGIN)

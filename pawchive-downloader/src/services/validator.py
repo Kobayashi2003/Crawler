@@ -28,7 +28,7 @@ class Validator:
 
     # ==================== Conflict detection ====================
 
-    def _templates(self, artist: Artist):
+    def _templates(self, artist: Artist, group: str = ""):
         cv = lambda k: get_config_value(artist, self.config, k)
         return {
             'download_dir': cv('download_dir'),
@@ -37,7 +37,14 @@ class Validator:
             'file_template': cv('file_template'),
             'date_format': cv('date_format'),
             'rename_images_only': cv('rename_images_only'),
+            # Must agree with Downloader._artist_dir, or every file looks missing.
+            'group': group if cv('group_folders') else "",
         }
+
+    @staticmethod
+    def _artist_dir(artist: Artist, t) -> Path:
+        return Formatter.artist_dir(t['download_dir'], artist,
+                                    t['artist_folder_template'], t['group'])
 
     def find_conflicts(self, artists: List[Artist]) -> List[Tuple[str, List[str]]]:
         """`[(path, [ids])]` for every path claimed by more than one item."""
@@ -45,10 +52,10 @@ class Validator:
         post_paths = defaultdict(list)     # path -> ["artist:post"]
         file_paths = defaultdict(list)     # path -> ["artist:post:name"]
 
+        groups = self.storage.artist_groups()   # read once, not per artist
         for artist in artists:
-            t = self._templates(artist)
-            artist_folder = Formatter.artist_folder(artist, t['artist_folder_template'])
-            artist_dir = Path(t['download_dir']) / artist_folder
+            t = self._templates(artist, groups.get(artist.id, ""))
+            artist_dir = self._artist_dir(artist, t)
             artist_paths[str(artist_dir)].append(artist.id)
 
             for post in self.cache.load_posts(artist.id):
@@ -122,8 +129,8 @@ class Validator:
     def clean_post_folders(self, artist: Artist, quarantine: str = "_invalid",
                            dry: bool = True) -> List[Tuple[str, str]]:
         """Quarantine folders matching no cached post. Returns (from, to) moves."""
-        t = self._templates(artist)
-        artist_dir = Path(t['download_dir']) / Formatter.artist_folder(artist, t['artist_folder_template'])
+        t = self._templates(artist, self.storage.artist_group(artist.id))
+        artist_dir = self._artist_dir(artist, t)
         if not artist_dir.is_dir():
             return []
 
