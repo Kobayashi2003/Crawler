@@ -84,14 +84,11 @@ class Migrator:
     def locate_artist_dirs(self, artists: List[Artist], download_dir: str) -> Dict[str, Path]:
         """`artist_id -> the folder that currently holds their posts`.
 
-        Found by the post ids embedded in folder names, not by reconstructing
-        the old template. A folder whose children are this creator's posts *is*
-        this creator's folder -- whatever layout produced it, including one from
-        an older buggy version or an external tool. That is the whole point:
-        the previous template is often unknowable, and asking the user for it
-        cannot recover a layout no template ever described.
+        Found by the post ids in folder names rather than by reconstructing the
+        old template, which is often unknowable -- a layout left by an older
+        buggy version or an external tool matches no template at all.
 
-        Requires `{id}` in `post_folder_template`; without it, nothing matches
+        Requires `{id}` in `post_folder_template`; without it nothing matches
         and callers fall back to the old/new template diff.
         """
         owner: Dict[str, str] = {}            # post id -> artist id
@@ -115,8 +112,8 @@ class Migrator:
                         break
             if not hits:
                 continue
-            # Children are post folders, so this is a creator folder: record it
-            # and stop descending -- nothing below is another creator.
+            # Its children are post folders, so stop descending: nothing below
+            # belongs to another creator.
             best = max(hits, key=hits.get)
             votes[best][dirpath] += hits[best]
             dirnames[:] = []

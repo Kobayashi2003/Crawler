@@ -10,15 +10,11 @@ _FORMAT_PLUGIN = 'src/plugins/format_plugin.py'
 
 
 def group_values(group: str) -> dict:
-    """The `{group*}` template variables for one creator's place in `artists/`.
+    """The `{group*}` variables: the creator's path under `data/artists/` minus
+    the `.json` (see `Storage.artist_groups`). `artists.json` gives `''`, so
+    they all come out empty and drop out of the path.
 
-    `group` is the creator's path relative to `data/artists/`, minus the
-    `.json` (see `Storage.artist_groups`); `''` means `artists.json`, i.e. the
-    download root -- every variable is then empty and drops out of the path.
-
-    These are the only *path-valued* variables: their `/` is real hierarchy, so
-    they are sanitized with `sanitize_path`, not `sanitize_component`. Every
-    other variable is name-valued and may never introduce a directory level.
+    Path-valued, unlike every other variable: their `/` is real hierarchy.
     """
     parts = [p for p in group.split('/') if p]
     return {
@@ -34,28 +30,18 @@ class Formatter:
 
     Every segment is sanitized for use as a Windows path component. Each level
     can be customised by a hot-reloaded plugin.
-
-    Two kinds of template variable, and the difference is load-bearing:
-
-    * **name-valued** (`{alias}`, `{name}`, `{service}`, `{title}`, `{id}` ...)
-      are sanitized per value *before* substitution, so a `/` inside them
-      becomes `／` and can never create a directory. An alias like
-      "hans.B / 藩滑るめる" would otherwise split into two levels.
-    * **path-valued** (`{group}` and friends) keep their `/` as real hierarchy.
-
-    Only the template's own literal `/` and a path-valued variable may add a
-    level. Length is capped per component by `sanitize_component`; prefer
-    budgeting in the template itself (`{title:.60}`).
     """
 
     @staticmethod
     def artist_dir(download_dir: str, artist: Artist, template: str, group: str = "") -> Path:
-        """Where one creator's posts live: `download_dir / artist_folder`."""
         return Path(download_dir) / Formatter.artist_folder(artist, template, group)
 
     @staticmethod
     @plugin_hook('format_artist_plugin', _FORMAT_PLUGIN)
     def artist_folder(artist: Artist, template: str, group: str = "") -> Path:
+        # Name values are sanitized *before* substitution: only a '/' written in
+        # the template, or a path-valued {group*}, may create a directory. An
+        # alias like "hans.B / 藩滑るめる" would otherwise split into two levels.
         raw = template.format(
             service=sanitize_component(artist.service),
             name=sanitize_component(artist.name),

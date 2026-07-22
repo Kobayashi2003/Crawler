@@ -16,23 +16,17 @@ _REPLACEMENTS = {
 _CONTROL = re.compile(r'[\x00-\x1F\x7F]')
 _SPACES = re.compile(r' +')
 
-# NTFS/ext4 cap one name at 255. Longer is not "too long to be pretty" -- the
-# OS refuses it outright (WinError 123), so a post whose title overflows would
-# fail to download forever. Templates should budget with `{title:.60}`; this is
-# the backstop for the ones that don't.
+# The filesystem refuses a longer name outright (WinError 123), so an overlong
+# title would fail to download forever. A template can budget ahead with
+# `{title:.60}`; this is the backstop for the ones that don't.
 MAX_COMPONENT = 255
 
 
 def truncate_component(text: str, limit: int = MAX_COMPONENT) -> str:
-    """Cap one component's length, keeping any extension.
-
-    Truncation can make two long names collide; callers that need uniqueness
-    put a stable `{id}` in their template (and `unique_names` covers files).
-    """
+    """Cap one component's length, keeping any extension."""
     if len(text) <= limit:
         return text
     stem, dot, ext = text.rpartition('.')
-    # Only treat it as an extension if it is short and there is a stem to keep.
     if dot and stem and len(ext) <= 10:
         return stem[:limit - len(ext) - 1].strip(' .') + '.' + ext
     return text[:limit].strip(' .')
@@ -52,10 +46,9 @@ def sanitize_path(path_str: str) -> str:
     """Sanitize each component but keep '/' separators, so `{alias}/{service}`
     still produces a hierarchy.
 
-    Empty segments collapse instead of becoming "unknown": a template variable
-    that is legitimately empty -- `{group}` for a creator in `artists.json`,
-    `{last_date}` before the first download -- must drop out of the path, not
-    invent a folder.
+    Empty segments collapse rather than becoming "unknown": a variable that is
+    legitimately empty (`{group}` at the download root, `{last_date}` before the
+    first download) must drop out of the path, not invent a folder.
     """
     parts = [sanitize_component(s) for s in path_str.replace('\\', '/').split('/') if s]
     return '/'.join(parts)

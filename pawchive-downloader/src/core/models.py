@@ -112,13 +112,11 @@ class Config:
     notify: bool = False
 
     # Path templates. `{group}` mirrors the `data/artists/` tree, so grouping is
-    # just a variable -- drop it from the template and downloads go flat again.
-    # Creator before service: a leading {service} splits one `fanbox/`+`patreon/`
-    # pair into a fresh pair inside every group folder.
-    # `{id}` is what lets `relayout-artists` recognise an existing folder whose
-    # title has since changed upstream, so keep it in the post template.
-    # Over-long names are capped at the filesystem limit by sanitize_component;
-    # to cap them shorter, use the format spec: `{title:.60}`.
+    # just a variable -- drop it and downloads go flat again. Creator before
+    # service, or each group folder grows its own `fanbox/`+`patreon/` pair.
+    # Keep `{id}`: it is how `relayout-artists` recognises a folder whose title
+    # has changed upstream. `{title:.60}` caps a name shorter than the
+    # filesystem limit sanitize_component already enforces.
     date_format: str = "%Y.%m.%d"
     artist_folder_template: str = "{group}/{alias}/{service}"
     post_folder_template: str = "[{published}][{id}] {title}"

@@ -413,7 +413,7 @@ def _failed_files_summary(names: List[str]) -> str:
 
 def _print_failed_posts(ctx: CLIContext, artist: Artist):
     """One artist's failed posts, under their own header -- the `details` half
-    of `list-failed`. Two lines per post: the post, then its failed files."""
+    of `list-failed`."""
     posts = [p for p in ctx.cache.load_posts(artist.id) if p.failed_files]
     if not posts:
         return
@@ -989,8 +989,6 @@ _SHARED_PATH_KEYS = ('download_dir', 'artist_folder_template')
 @_cmd('relayout-artists', 'MAINTAIN',
       "Move creator folders to match the current templates")
 def cmd_relayout_artists(ctx: CLIContext):
-    """Whole-folder move per creator, locating each by the post ids inside it --
-    so it needs no `old` templates and copes with layouts no template describes."""
     config = ctx.storage.load_config()
     artists = get_artists(ctx)
 
@@ -1012,7 +1010,7 @@ def cmd_relayout_artists(ctx: CLIContext):
 
 
 def _effective_migration_config(config) -> MigrationConfig:
-    """The global config as a MigrationConfig (the templates as they are now)."""
+    """The global config's templates, as a MigrationConfig."""
     return MigrationConfig(
         download_dir=config.download_dir,
         artist_folder_template=config.artist_folder_template,
@@ -1046,8 +1044,7 @@ def cmd_tasks(ctx: CLIContext):
     if recent:
         print("\nRecent:")
         for t in reversed(recent):
-            # A sync has no visible files to show for it, so its counts are the
-            # only feedback the user gets -- see cmd_sync.
+            # A sync leaves no files behind, so its counts are the only feedback.
             outcome = f" ({t.error})" if t.error else (f" — {t.note}" if t.note else "")
             print(f"  [{t.status}] {_task_label(ctx, t)}{outcome}")
 

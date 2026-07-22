@@ -91,8 +91,7 @@ class Storage:
         """Every artist dict under `artists/`, with the group path it came from.
 
         The group is the file's own location relative to `artists/`, minus the
-        `.json`: `artists/絵師/ロリメイン/T0.json` -> `絵師/ロリメイン/T0`. It is
-        what the `{group}` template variable mirrors into the download tree.
+        `.json`: `artists/絵師/ロリメイン/T0.json` -> `絵師/ロリメイン/T0`.
 
         A corrupt file raises rather than being skipped: skipping it would drop
         every artist it holds, and `save_artist` would then append a duplicate.

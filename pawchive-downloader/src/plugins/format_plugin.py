@@ -8,8 +8,8 @@ save, no restart. Delete this file to disable plugins.
     post_folder(post, template, date_format) -> str
     format_file(name, idx, template)         -> str
 
-`group` is the creator's path under `data/artists/` ('' = download root); it
-feeds the `{group}`/`{group_top}`/`{group_tail}`/`{group_leaf}` variables.
+`group` is the creator's path under `data/artists/`, feeding the `{group*}`
+template variables ('' = download root).
 """
 
 

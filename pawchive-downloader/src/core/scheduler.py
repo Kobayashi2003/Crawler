@@ -140,8 +140,8 @@ class Scheduler:
         return sum(self._add(DownloadTask(aid, task_type=TaskType.MANUAL)) for aid in artist_ids)
 
     def queue_sync(self, artist_id: str, deep: bool = False) -> bool:
-        """Queue a post-list refresh. Shares the one-task-per-artist rule with
-        downloads: both write the same cache, so they must not overlap."""
+        """Queue a post-list refresh. A sync and a download write the same
+        cache, so the one-task-per-artist rule has to cover both."""
         return self._add(DownloadTask(artist_id, deep=deep, task_type=TaskType.SYNC))
 
     def queue_sync_batch(self, artist_ids: List[str], deep: bool = False) -> int:
@@ -205,8 +205,7 @@ class Scheduler:
             if not artist:
                 raise Exception(f"Artist {task.artist_id} not found")
             if task.task_type == TaskType.SYNC:
-                # No files: only the cached post list is refreshed. The outcome
-                # goes on the task, since nobody is waiting at the prompt.
+                # Outcome goes on the task: nobody is waiting at the prompt.
                 new, edited = self.downloader.update_posts(artist, detect_edits=task.deep)
                 task.note = f"{new} new" + (f", {edited} edited" if task.deep else "")
             else:
