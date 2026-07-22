@@ -13,8 +13,8 @@ class Storage:
     Artists live in `artists.json`. As a convenience, any `*.json` files under
     `data/artists/` are also loaded (read-only, deduped by id) so creators can
     be organised into folders; `artists.json` always wins on conflicts. That
-    folder layout is also what `group_folders` mirrors into the download tree
-    -- see `artist_groups`.
+    folder layout is also what the `{group}` path template variable mirrors into
+    the download tree -- see `artist_groups`.
     """
 
     def __init__(self, data_dir: str = None):
@@ -92,7 +92,7 @@ class Storage:
 
         The group is the file's own location relative to `artists/`, minus the
         `.json`: `artists/絵師/ロリメイン/T0.json` -> `絵師/ロリメイン/T0`. It is
-        what `group_folders` mirrors into the download tree.
+        what the `{group}` template variable mirrors into the download tree.
 
         A corrupt file raises rather than being skipped: skipping it would drop
         every artist it holds, and `save_artist` would then append a duplicate.
@@ -108,7 +108,7 @@ class Storage:
                     yield group, item
 
     def artist_groups(self) -> Dict[str, str]:
-        """`artist_id -> group path`, for `group_folders`.
+        """`artist_id -> group path`, feeding the `{group}` template variables.
 
         Artists in `artists.json` map to `''` (the download root); it wins on
         conflicts, matching `get_artists`. Callers looping over many artists

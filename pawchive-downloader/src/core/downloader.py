@@ -269,8 +269,8 @@ class Downloader:
 
     def _download_posts(self, artist: Artist, posts: List[Post]) -> DownloadResult:
         self.logger.downloader_processing(artist=artist.display_name(), count=len(posts))
-        # Resolved once per run, not per post: with `group_folders` on it reads
-        # the artists/ tree, and every post of a run shares the same directory.
+        # Resolved once per run, not per post: it reads the artists/ tree for
+        # `{group}`, and every post of a run shares the same directory.
         artist_dir = self._artist_dir(artist)
         self._sweep_partials(artist_dir)
         downloaded = failed = 0
@@ -365,9 +365,9 @@ class Downloader:
 
     def _artist_dir(self, artist: Artist) -> Path:
         cv = lambda k: get_config_value(artist, self.config, k)
-        group = self.storage.artist_group(artist.id) if cv('group_folders') else ""
         return Formatter.artist_dir(cv('download_dir'), artist,
-                                    cv('artist_folder_template'), group)
+                                    cv('artist_folder_template'),
+                                    self.storage.artist_group(artist.id))
 
     def _sweep_partials(self, artist_dir: Path):
         """Delete `.part` files left by an earlier run.

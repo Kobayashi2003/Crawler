@@ -9,39 +9,60 @@ from .models import Artist, Post
 _FORMAT_PLUGIN = 'src/plugins/format_plugin.py'
 
 
-class Formatter:
-    """Builds `download_dir / [group] / artist_folder / post_folder / file_name`.
+def group_values(group: str) -> dict:
+    """The `{group*}` template variables for one creator's place in `artists/`.
 
-    Every segment is sanitized for use as a Windows path component. Each naming
-    level can be customised by a hot-reloaded plugin; `group` is a *location*,
-    not a name, so it sits outside the plugin contract (see `artist_dir`).
+    `group` is the creator's path relative to `data/artists/`, minus the
+    `.json` (see `Storage.artist_groups`); `''` means `artists.json`, i.e. the
+    download root -- every variable is then empty and drops out of the path.
+
+    These are the only *path-valued* variables: their `/` is real hierarchy, so
+    they are sanitized with `sanitize_path`, not `sanitize_component`. Every
+    other variable is name-valued and may never introduce a directory level.
+    """
+    parts = [p for p in group.split('/') if p]
+    return {
+        'group': sanitize_path(group),
+        'group_top': sanitize_path(parts[0]) if parts else '',
+        'group_tail': sanitize_path('/'.join(parts[1:])),
+        'group_leaf': sanitize_path(parts[-1]) if parts else '',
+    }
+
+
+class Formatter:
+    """Builds `download_dir / artist_folder / post_folder / file_name`.
+
+    Every segment is sanitized for use as a Windows path component. Each level
+    can be customised by a hot-reloaded plugin.
+
+    Two kinds of template variable, and the difference is load-bearing:
+
+    * **name-valued** (`{alias}`, `{name}`, `{service}`, `{title}`, `{id}` ...)
+      are sanitized per value *before* substitution, so a `/` inside them
+      becomes `／` and can never create a directory. An alias like
+      "hans.B / 藩滑るめる" would otherwise split into two levels.
+    * **path-valued** (`{group}` and friends) keep their `/` as real hierarchy.
+
+    Only the template's own literal `/` and a path-valued variable may add a
+    level. Length is capped per component by `sanitize_component`; prefer
+    budgeting in the template itself (`{title:.60}`).
     """
 
     @staticmethod
     def artist_dir(download_dir: str, artist: Artist, template: str, group: str = "") -> Path:
-        """Where one artist's posts live.
-
-        `group` mirrors the `data/artists/` tree (see `Storage.artist_groups`);
-        empty -- the default, and what `artists.json` yields -- means the
-        download root, leaving paths exactly as they were before grouping.
-        """
-        base = Path(download_dir)
-        if group:
-            base = base / sanitize_path(group)
-        return base / Formatter.artist_folder(artist, template)
+        """Where one creator's posts live: `download_dir / artist_folder`."""
+        return Path(download_dir) / Formatter.artist_folder(artist, template, group)
 
     @staticmethod
     @plugin_hook('format_artist_plugin', _FORMAT_PLUGIN)
-    def artist_folder(artist: Artist, template: str) -> Path:
-        # Values are sanitized *before* substitution: only a '/' written in the
-        # template may create a directory. An alias like "hans.B / 藩滑るめる"
-        # would otherwise split into two levels.
+    def artist_folder(artist: Artist, template: str, group: str = "") -> Path:
         raw = template.format(
             service=sanitize_component(artist.service),
             name=sanitize_component(artist.name),
             alias=sanitize_component(artist.alias or artist.name),
             user_id=sanitize_component(artist.user_id),
             last_date=(artist.last_date[:10] if artist.last_date else ""),
+            **group_values(group),
         )
         return Path(sanitize_path(raw))
 

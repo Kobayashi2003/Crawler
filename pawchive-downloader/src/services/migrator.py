@@ -1,13 +1,18 @@
+import os
+import re
 from collections import defaultdict
-from dataclasses import replace
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from ..core.cache import Cache
 from ..core.formatter import Formatter
 from ..core.models import Artist, MigrationConfig, MigrationPlan, MigrationResult, MigrationType, Post
 from ..core.storage import Storage
 from ..core.files import extract_files
+
+# Any `[...]` group in a folder name; one of them is the post id under any
+# template that includes `{id}`.
+_BRACKETED = re.compile(r'\[([^\[\]]+)\]')
 
 
 class Migrator:
@@ -76,30 +81,64 @@ class Migrator:
 
         return self._resolve(MigrationType.FILE, total, mapping, old_to, new_to, skipped)
 
-    def plan_groups(self, artists: List[Artist], config: MigrationConfig,
-                    groups: Dict[str, str]) -> MigrationPlan:
-        """Move whole artist folders so the download tree mirrors `data/artists/`.
+    def locate_artist_dirs(self, artists: List[Artist], download_dir: str) -> Dict[str, Path]:
+        """`artist_id -> the folder that currently holds their posts`.
 
-        `groups` is `Storage.artist_groups()`: artist_id -> target group ('' =
-        download root). The *current* location is whichever candidate exists on
-        disk -- the ungrouped root or some other group folder -- so this works
-        both for a first run and after a creator is moved between json files.
+        Found by the post ids embedded in folder names, not by reconstructing
+        the old template. A folder whose children are this creator's posts *is*
+        this creator's folder -- whatever layout produced it, including one from
+        an older buggy version or an external tool. That is the whole point:
+        the previous template is often unknowable, and asking the user for it
+        cannot recover a layout no template ever described.
+
+        Requires `{id}` in `post_folder_template`; without it, nothing matches
+        and callers fall back to the old/new template diff.
         """
+        owner: Dict[str, str] = {}            # post id -> artist id
+        for artist in artists:
+            for post in self.cache.load_posts(artist.id):
+                owner[str(post.id)] = artist.id
+
+        found: Dict[str, Path] = {}
+        votes: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        root = Path(download_dir)
+        if not root.is_dir():
+            return found
+
+        for dirpath, dirnames, _files in os.walk(root):
+            hits = defaultdict(int)
+            for name in dirnames:
+                for token in _BRACKETED.findall(name):
+                    aid = owner.get(token.strip())
+                    if aid:
+                        hits[aid] += 1
+                        break
+            if not hits:
+                continue
+            # Children are post folders, so this is a creator folder: record it
+            # and stop descending -- nothing below is another creator.
+            best = max(hits, key=hits.get)
+            votes[best][dirpath] += hits[best]
+            dirnames[:] = []
+
+        for aid, paths in votes.items():
+            found[aid] = Path(max(paths, key=paths.get))
+        return found
+
+    def plan_artists(self, artists: List[Artist], config: MigrationConfig) -> MigrationPlan:
+        """Move each creator's whole folder to where the current templates say
+        it belongs. One rename per creator, rather than one per post."""
+        located = self.locate_artist_dirs(artists, config.download_dir)
         mapping = {}                          # artist_id -> (old_path, new_path)
         old_to, new_to = defaultdict(list), defaultdict(list)
         skipped = []
-        candidates = {g for g in groups.values() if g} | {""}
 
         for artist in artists:
-            new_path = self._artist_path(artist, replace(config, group=groups.get(artist.id, "")))
-            old_path = next(
-                (p for p in (self._artist_path(artist, replace(config, group=g))
-                             for g in sorted(candidates))
-                 if p != new_path and p.is_dir()), None)
+            new_path = self._artist_path(artist, config)
+            old_path = located.get(artist.id)
             if old_path is None:
-                # Already in place, or nothing downloaded for this artist yet.
                 skipped.append((artist.id, "already correct" if new_path.is_dir()
-                                else "source missing"))
+                                else "nothing downloaded"))
                 continue
             mapping[artist.id] = (old_path, new_path)
             old_to[str(old_path)].append(artist.id)
@@ -151,4 +190,5 @@ class Migrator:
 
     def _artist_path(self, artist: Artist, config: MigrationConfig) -> Path:
         return Formatter.artist_dir(config.download_dir, artist,
-                                    config.artist_folder_template, config.group)
+                                    config.artist_folder_template,
+                                    self.storage.artist_group(artist.id))

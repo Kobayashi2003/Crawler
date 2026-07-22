@@ -4,15 +4,18 @@ Each hook receives the formatter's inner function and returns a wrapper, so you
 can massage inputs before the default logic runs. All three are no-ops; edit and
 save, no restart. Delete this file to disable plugins.
 
-    artist_folder(artist, template)          -> pathlib.Path
+    artist_folder(artist, template, group)   -> pathlib.Path
     post_folder(post, template, date_format) -> str
     format_file(name, idx, template)         -> str
+
+`group` is the creator's path under `data/artists/` ('' = download root); it
+feeds the `{group}`/`{group_top}`/`{group_tail}`/`{group_leaf}` variables.
 """
 
 
 def format_artist_plugin(inner):
-    def wrapper(artist, template):
-        return inner(artist, template)
+    def wrapper(artist, template, group=""):
+        return inner(artist, template, group)
     return wrapper
 
 

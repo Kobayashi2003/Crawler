@@ -983,23 +983,37 @@ def cmd_relayout_files(ctx: CLIContext, artist):
 
 # Path settings an artist may override; a shared plan would move their folders
 # to the wrong place, so they are left alone (use relayout-posts for those).
-_GROUP_PATH_KEYS = ('download_dir', 'artist_folder_template')
+_SHARED_PATH_KEYS = ('download_dir', 'artist_folder_template')
 
 
-@_cmd('relayout-groups', 'MAINTAIN',
-      "Move creator folders so downloads mirror the artists/ tree")
-def cmd_relayout_groups(ctx: CLIContext):
+@_cmd('relayout-artists', 'MAINTAIN',
+      "Move creator folders to match the current templates")
+def cmd_relayout_artists(ctx: CLIContext):
+    """Whole-folder move per creator, locating each by the post ids inside it --
+    so it needs no `old` templates and copes with layouts no template describes."""
     config = ctx.storage.load_config()
     artists = get_artists(ctx)
 
-    skipped = [a for a in artists if set(_GROUP_PATH_KEYS) & set(a.config or {})]
+    skipped = [a for a in artists if set(_SHARED_PATH_KEYS) & set(a.config or {})]
     if skipped:
         print(f"Skipping {len(skipped)} creator(s) with their own path config: "
               + ", ".join(a.display_name() for a in skipped[:5]))
         ids = {a.id for a in skipped}
         artists = [a for a in artists if a.id not in ids]
 
-    target = MigrationConfig(
+    if '{id}' not in config.post_folder_template:
+        raise CommandError(
+            "post_folder_template has no {id}, so existing folders cannot be "
+            "identified. Add {id} to it, or use relayout-posts.")
+
+    print("Scanning the download tree for existing creator folders...")
+    plan = ctx.migrator.plan_artists(artists, _effective_migration_config(config))
+    _apply_plan(ctx, plan)
+
+
+def _effective_migration_config(config) -> MigrationConfig:
+    """The global config as a MigrationConfig (the templates as they are now)."""
+    return MigrationConfig(
         download_dir=config.download_dir,
         artist_folder_template=config.artist_folder_template,
         post_folder_template=config.post_folder_template,
@@ -1008,11 +1022,6 @@ def cmd_relayout_groups(ctx: CLIContext):
         rename_images_only=config.rename_images_only,
         image_extensions=config.image_extensions,
     )
-    plan = ctx.migrator.plan_groups(artists, target, ctx.storage.artist_groups())
-    if not config.group_folders:
-        print("Note: 'group_folders' is off, so new downloads still land ungrouped."
-              "\n      Turn it on with 'config' to keep them in these folders.")
-    _apply_plan(ctx, plan)
 
 
 # ============================================================================
@@ -1094,7 +1103,7 @@ def cmd_config(ctx: CLIContext):
     config = ctx.storage.load_config()
     editable = [
         'download_dir', 'date_format', 'artist_folder_template', 'post_folder_template',
-        'file_template', 'group_folders', 'save_content', 'save_empty_posts', 'rename_images_only',
+        'file_template', 'save_content', 'save_empty_posts', 'rename_images_only',
         'max_concurrent_artists', 'max_concurrent_posts', 'max_concurrent_files',
         'retry_delay', 'request_timeout', 'notify',
     ]

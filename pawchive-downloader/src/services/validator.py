@@ -38,7 +38,7 @@ class Validator:
             'date_format': cv('date_format'),
             'rename_images_only': cv('rename_images_only'),
             # Must agree with Downloader._artist_dir, or every file looks missing.
-            'group': group if cv('group_folders') else "",
+            'group': group,
         }
 
     @staticmethod

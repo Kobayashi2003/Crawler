@@ -111,18 +111,18 @@ class Config:
 
     notify: bool = False
 
-    # Path templates
+    # Path templates. `{group}` mirrors the `data/artists/` tree, so grouping is
+    # just a variable -- drop it from the template and downloads go flat again.
+    # Creator before service: a leading {service} splits one `fanbox/`+`patreon/`
+    # pair into a fresh pair inside every group folder.
+    # `{id}` is what lets `relayout-artists` recognise an existing folder whose
+    # title has since changed upstream, so keep it in the post template.
+    # Over-long names are capped at the filesystem limit by sanitize_component;
+    # to cap them shorter, use the format spec: `{title:.60}`.
     date_format: str = "%Y.%m.%d"
-    artist_folder_template: str = "{service}/{name}"
-    post_folder_template: str = "[{published}] {title}"
+    artist_folder_template: str = "{group}/{alias}/{service}"
+    post_folder_template: str = "[{published}][{id}] {title}"
     file_template: str = "{idx}"
-
-    # Mirror the `data/artists/` folder tree in the download tree: an artist
-    # listed in `artists/絵師/ロリメイン/T0.json` downloads under
-    # `絵師/ロリメイン/T0/`. Artists in `artists.json` stay at the root.
-    # Off by default -- turning it on moves where new downloads land, so
-    # existing libraries need `relayout-groups` to follow.
-    group_folders: bool = False
 
     # Download behaviour
     save_content: bool = True
@@ -215,7 +215,7 @@ class ExternalLink:
 class MigrationType:
     POST = "post"
     FILE = "file"
-    ARTIST = "artist"   # whole artist folder, moved between group folders
+    ARTIST = "artist"   # whole creator folder, moved to match the templates
 
 
 @dataclass
@@ -228,9 +228,6 @@ class MigrationConfig:
     date_format: str
     rename_images_only: bool
     image_extensions: set
-    # Group folder for this side of the move; '' = the download root. Lets a
-    # plan express "same templates, different group" -- see `plan_groups`.
-    group: str = ""
 
 
 @dataclass
