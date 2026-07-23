@@ -14,7 +14,7 @@ from ..common import env
 from ..core.api import API
 from ..core.cache import Cache
 from ..core.downloader import Downloader
-from ..core.files import get_config_value
+from ..core.files import extract_files, get_config_value
 from ..core.models import Artist, MigrationConfig
 from ..core.scheduler import Scheduler
 from ..core.storage import Storage
@@ -85,7 +85,7 @@ def _status(artist: Artist, corrupt: bool = False) -> str:
     return "Active"
 
 
-_TABLE_HEADER = f"{'#':>3}  {'STATUS':<6}  {'DONE/TOTAL':>11}  {'FAIL':>4}  NAME"
+_TABLE_HEADER = f"{'#':>3}  {'STATUS':<6}  {'DONE/TOTAL':>11}  {'FAIL':>4}  {'LOST':>4}  NAME"
 
 
 def _artist_row(ctx: CLIContext, index: int, artist: Artist) -> str:
@@ -95,7 +95,7 @@ def _artist_row(ctx: CLIContext, index: int, artist: Artist) -> str:
     corrupt = s.get('corrupt')
     progress = "?/?" if corrupt else f"{s['done']}/{s['total']}"
     line = (f"{index:>3}  {_status(artist, corrupt):<6}  {progress:>11}  "
-            f"{s['failed']:>4}  {artist.display_name()} [{artist.id}]")
+            f"{s['failed']:>4}  {s['lost']:>4}  {artist.display_name()} [{artist.id}]")
     if corrupt:
         return _c(line, 91)   # red: cache unreadable, state unknown
     if artist.completed:
@@ -264,8 +264,9 @@ def cmd_info(ctx: CLIContext, artist):
     if s.get('corrupt'):
         print("  posts      cache unreadable (corrupt JSON)")
     else:
+        lost = f", {s['lost']} lost" if s['lost'] else ""
         print(f"  posts      {s['done']}/{s['total']} done, "
-              f"{s['pending']} pending, {s['failed']} with failed files")
+              f"{s['pending']} pending, {s['failed']} with failed files{lost}")
     if artist.config:
         print("  overrides  " + ", ".join(f"{k}={v}" for k, v in artist.config.items()))
     if artist.filter:
@@ -399,9 +400,9 @@ def cmd_list_pending(ctx, sort_by, service):
                sort_by, service, "artists with pending work")
 
 
-_FAILED_LISTING = _LISTING + (Param('details', 'bool', False,
-                                    'also list each failed post, per creator'),)
-
+# `details` lists each matching post under its creator; shared by list-failed/-lost.
+_DETAIL_LISTING = _LISTING + (Param('details', 'bool', False,
+                                    'also list each matching post, per creator'),)
 
 _FILES_SHOWN = 5   # a post can fail 40+ files; name a few, count the rest
 
@@ -411,26 +412,52 @@ def _failed_files_summary(names: List[str]) -> str:
     return ", ".join(names[:_FILES_SHOWN]) + (f" +{extra} more" if extra > 0 else "")
 
 
+def _post_group_header(artist: Artist, count: int, noun: str):
+    print(f"\n{_c(artist.display_name(), 1)} [{artist.id}]  {count} {noun}")
+
+
+def _post_line(post, tag: str, color: int):
+    print(f"  [{(post.published or '')[:10]}] [{post.id}] {post.title[:60]}"
+          f"  {_c(f'[{tag}]', color)}")
+
+
 def _print_failed_posts(ctx: CLIContext, artist: Artist):
-    """One artist's failed posts, under their own header -- the `details` half
-    of `list-failed`."""
     posts = [p for p in ctx.cache.load_posts(artist.id) if p.failed_files]
     if not posts:
         return
-    print(f"\n{_c(artist.display_name(), 1)} [{artist.id}]  {len(posts)} failed posts")
+    _post_group_header(artist, len(posts), "failed posts")
     for p in sorted(posts, key=lambda p: p.published or ''):
-        print(f"  [{(p.published or '')[:10]}] [{p.id}] {p.title[:60]}"
-              f"  {_c(f'[{len(p.failed_files)} failed]', 91)}")
+        _post_line(p, f"{len(p.failed_files)} failed", 91)
         print(f"      {_c(_failed_files_summary(p.failed_files), 90)}")
 
 
-@_cmd('list-failed', 'BROWSE', 'Creators with failed files', params=_FAILED_LISTING)
+@_cmd('list-failed', 'BROWSE', 'Creators with failed files', params=_DETAIL_LISTING)
 def cmd_list_failed(ctx, sort_by, service, details):
     artists = _show_list(ctx, lambda a: ctx.cache.stats(a.id)['failed'] > 0,
                          sort_by, service, "artists with failed files")
     if details:
         for a in artists:
             _print_failed_posts(ctx, a)
+
+
+def _print_lost_posts(ctx: CLIContext, artist: Artist):
+    # Lost posts carry no failed_files; the file count is what upstream withholds.
+    posts = ctx.cache.get_lost(artist.id)
+    if not posts:
+        return
+    _post_group_header(artist, len(posts), "lost posts")
+    for p in sorted(posts, key=lambda p: p.published or ''):
+        _post_line(p, f"{len(extract_files(p))} file(s) upstream has none of", 90)
+
+
+@_cmd('list-lost', 'BROWSE', 'Creators whose posts upstream has no files for',
+      params=_DETAIL_LISTING)
+def cmd_list_lost(ctx, sort_by, service, details):
+    artists = _show_list(ctx, lambda a: ctx.cache.stats(a.id)['lost'] > 0,
+                         sort_by, service, "artists with lost posts")
+    if details:
+        for a in artists:
+            _print_lost_posts(ctx, a)
 
 
 # ============================================================================
@@ -469,6 +496,37 @@ def cmd_download_failed(ctx: CLIContext):
            if ctx.cache.stats(a.id)['failed'] > 0]
     added = ctx.scheduler.queue_batch(ids)
     print(f"Queued {added} creators with failed files.")
+
+
+# sync-lost and download-lost queue the same lost set through different handlers,
+# so their command bodies share these two helpers.
+def _queue_lost(ctx: CLIContext, query: str, queue_fn, verb: str):
+    artist = select_artist(ctx, query)
+    if not artist:
+        return
+    if queue_fn(artist.id):
+        lost = ctx.cache.stats(artist.id)['lost']
+        print(f"Queued lost {verb} for {artist.display_name()} ({lost} lost). "
+              "Use 'tasks' to monitor.")
+    else:
+        print("Already queued or running.")
+
+
+def _queue_lost_all(ctx: CLIContext, batch_fn):
+    ids = [a.id for a in get_artists(ctx, only_active=True)
+           if ctx.cache.stats(a.id)['lost'] > 0]
+    print(f"Queued {batch_fn(ids)} creators with lost posts.")
+
+
+@_cmd('download-lost', 'DOWNLOAD', "Force-retry a creator's lost posts",
+      params=(_ARTIST,))
+def cmd_download_lost(ctx: CLIContext, artist):
+    _queue_lost(ctx, artist, ctx.scheduler.queue_download_lost, "retry")
+
+
+@_cmd('download-lost-all', 'DOWNLOAD', 'Force-retry lost posts for every creator with any')
+def cmd_download_lost_all(ctx: CLIContext):
+    _queue_lost_all(ctx, ctx.scheduler.queue_download_lost_batch)
 
 
 def _ask_date(value: str, label: str) -> Optional[str]:
@@ -552,6 +610,20 @@ def cmd_sync_all(ctx: CLIContext, deep):
     added = ctx.scheduler.queue_sync_batch(ids, deep)
     print(f"Queued {added}/{len(ids)} syncs" + (" (deep)" if deep else "")
           + ". Use 'tasks' to monitor.")
+
+
+# A normal sync never un-marks a lost post; these re-check them and reclaim any
+# the server has since restored, returning them to the download queue.
+
+@_cmd('sync-lost', 'SYNC', 'Re-check a creator’s lost posts for upstream restore',
+      params=(_ARTIST,))
+def cmd_sync_lost(ctx: CLIContext, artist):
+    _queue_lost(ctx, artist, ctx.scheduler.queue_sync_lost, "re-check")
+
+
+@_cmd('sync-lost-all', 'SYNC', 'Re-check lost posts for every creator with any')
+def cmd_sync_lost_all(ctx: CLIContext):
+    _queue_lost_all(ctx, ctx.scheduler.queue_sync_lost_batch)
 
 
 # ============================================================================

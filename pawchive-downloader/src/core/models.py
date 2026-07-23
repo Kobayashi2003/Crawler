@@ -40,6 +40,10 @@ class Post:
     attachments: List[Dict] = field(default_factory=list)
     done: bool = False
     failed_files: List[str] = field(default_factory=list)
+    # Upstream has only metadata, no file bytes (`has_full: false`); kept out of
+    # the normal download/undone flow. Set on sync, cleared by `sync-lost` or a
+    # successful download. Default False so an old cache is never silently lost.
+    lost: bool = False
 
 
 @dataclass
@@ -175,6 +179,8 @@ class DownloadTask:
     from_date: Optional[str] = None
     until_date: Optional[str] = None
     deep: bool = False               # SYNC only: also re-flag edited posts
+    lost: bool = False               # download only: target lost posts, forcing a retry
+    recover_lost: bool = False       # SYNC only: un-mark posts the server has restored
     task_type: str = TaskType.MANUAL
     status: str = TaskStatus.QUEUED
     created_at: datetime = field(default_factory=datetime.now)

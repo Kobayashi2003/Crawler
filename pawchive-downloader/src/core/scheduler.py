@@ -147,6 +147,20 @@ class Scheduler:
     def queue_sync_batch(self, artist_ids: List[str], deep: bool = False) -> int:
         return sum(self.queue_sync(aid, deep) for aid in artist_ids)
 
+    def queue_sync_lost(self, artist_id: str) -> bool:
+        """Queue a refresh that reclaims lost posts the server has restored."""
+        return self._add(DownloadTask(artist_id, recover_lost=True, task_type=TaskType.SYNC))
+
+    def queue_sync_lost_batch(self, artist_ids: List[str]) -> int:
+        return sum(self.queue_sync_lost(aid) for aid in artist_ids)
+
+    def queue_download_lost(self, artist_id: str) -> bool:
+        """Queue a forced retry of an artist's lost posts."""
+        return self._add(DownloadTask(artist_id, lost=True, task_type=TaskType.MANUAL))
+
+    def queue_download_lost_batch(self, artist_ids: List[str]) -> int:
+        return sum(self.queue_download_lost(aid) for aid in artist_ids)
+
     def _add(self, task: DownloadTask) -> bool:
         with self.lock:
             if task.artist_id in self.active:
@@ -206,10 +220,12 @@ class Scheduler:
                 raise Exception(f"Artist {task.artist_id} not found")
             if task.task_type == TaskType.SYNC:
                 # Outcome goes on the task: nobody is waiting at the prompt.
-                new, edited = self.downloader.update_posts(artist, detect_edits=task.deep)
-                task.note = f"{new} new" + (f", {edited} edited" if task.deep else "")
+                counts = self.downloader.update_posts(
+                    artist, detect_edits=task.deep, recover_lost=task.recover_lost)
+                task.note = self._sync_note(counts, task)
             else:
-                self.downloader.download_artist(artist, task.from_date, task.until_date)
+                self.downloader.download_artist(
+                    artist, task.from_date, task.until_date, lost=task.lost)
             task.status = TaskStatus.COMPLETED
         except Exception as e:
             task.status = TaskStatus.FAILED
@@ -217,6 +233,17 @@ class Scheduler:
             self.logger.scheduler_task_failed(artist_id=task.artist_id, error=str(e), level='error')
         finally:
             task.finished_at = datetime.now()
+
+    @staticmethod
+    def _sync_note(counts: Dict[str, int], task: DownloadTask) -> str:
+        parts = [f"{counts['new']} new"]
+        if task.deep:
+            parts.append(f"{counts['edited']} edited")
+        if counts['lost']:
+            parts.append(f"{counts['lost']} now lost")
+        if task.recover_lost:
+            parts.append(f"{counts['recovered']} recovered")
+        return ", ".join(parts)
 
     def _finish(self, task: DownloadTask):
         with self.lock:

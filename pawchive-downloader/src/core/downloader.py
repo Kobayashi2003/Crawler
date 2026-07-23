@@ -55,15 +55,20 @@ class Downloader:
 
     # ==================== Cache refresh ====================
 
-    def update_posts(self, artist: Artist, detect_edits: bool = False) -> tuple[int, int]:
-        """Refresh the cached post list; returns `(new_count, edited_count)`.
+    def update_posts(self, artist: Artist, detect_edits: bool = False,
+                     recover_lost: bool = False) -> Dict[str, int]:
+        """Refresh the cached post list; returns counts keyed
+        `new`/`edited`/`lost`/`recovered`.
 
         Re-pages every time by default: the profile's `updated` is a bulk-import
         batch timestamp and posts get inserted after it, so trusting it silently
         skips new posts. `trust_updated_timestamp` opts into the lossy fast path.
+
+        `recover_lost` (from `sync-lost`) reclaims restored posts; see `_apply_lost`.
         """
+        empty = {'new': 0, 'edited': 0, 'lost': 0, 'recovered': 0}
         if self.is_cancelled(artist.id) or artist.completed or artist.ignore:
-            return (0, 0)
+            return empty
 
         try:
             profile = self.api.get_profile_until_success(artist.service, artist.user_id)
@@ -72,24 +77,25 @@ class Downloader:
             # stays downloadable, and a later run picks it up if it returns.
             self.logger.downloader_creator_unavailable(
                 artist=artist.display_name(), error=str(e), level='error')
-            return (0, 0)
+            return empty
 
         cached_posts = self.cache.load_posts(artist.id, apply_filters=False)
         cached_profile = self.cache.load_profile(artist.id)
 
-        if getattr(self.config, 'trust_updated_timestamp', False) and not detect_edits:
+        if (getattr(self.config, 'trust_updated_timestamp', False)
+                and not detect_edits and not recover_lost):
             unchanged = bool(cached_posts and cached_profile and cached_profile.updated
                              and cached_profile.updated == profile.get('updated'))
             if unchanged:
                 self.logger.downloader_no_new(artist=artist.display_name())
-                return (0, 0)
+                return empty
 
         try:
             by_id = self._fetch_index(artist)
         except PermanentAPIError as e:
             self.logger.downloader_creator_unavailable(
                 artist=artist.display_name(), error=str(e), level='error')
-            return (0, 0)
+            return empty
 
         # No post_count exists, so a shortfall is the only truncation signal.
         # Don't accept it first time: refetch and keep whichever scan saw more.
@@ -107,7 +113,7 @@ class Downloader:
         existing = {str(p.id): p for p in cached_posts}
         is_new_artist = not cached_posts
         merged: List[Post] = []
-        new_count = edited_count = 0
+        new_count = edited_count = lost_count = recovered_count = 0
 
         for data in by_id.values():
             post = existing.get(str(data['id']))
@@ -120,6 +126,11 @@ class Downloader:
                     new_count += 1
             elif self._refresh(post, data, detect_edits):
                 edited_count += 1
+            change = self._apply_lost(post, data, recover_lost)
+            if change == 'lost':
+                lost_count += 1
+            elif change == 'recovered':
+                recovered_count += 1
             merged.append(post)
 
         # Keep posts the API omitted this time (transient gaps).
@@ -132,12 +143,38 @@ class Downloader:
         self.cache.save_posts(artist.id, merged)
         self.cache.save_profile(artist.id, profile)
 
-        if new_count or edited_count or missing:
-            self.logger.downloader_cached(artist=artist.display_name(),
-                                          total=len(merged), new=new_count, edited=edited_count)
+        if new_count or edited_count or missing or lost_count or recovered_count:
+            self.logger.downloader_cached(
+                artist=artist.display_name(), total=len(merged), new=new_count,
+                edited=edited_count, lost=lost_count, recovered=recovered_count)
         else:
             self.logger.downloader_no_new(artist=artist.display_name())
-        return (new_count, edited_count)
+        return {'new': new_count, 'edited': edited_count,
+                'lost': lost_count, 'recovered': recovered_count}
+
+    @staticmethod
+    def _apply_lost(post: Post, data: Dict, recover_lost: bool) -> Optional[str]:
+        """Reconcile `post.lost` with the server's `has_full`.
+
+        Returns 'lost' when a post is newly marked, 'recovered' when un-marked,
+        else None. A done post is never lost. Marking (available -> lost) happens
+        on every sync; un-marking (lost -> available) only when `recover_lost`,
+        so a normal sync leaves the lost set untouched once it exists.
+        """
+        if post.done:
+            post.lost = False
+            return None
+        # Absent key -> treat as available: never invent a loss from missing data.
+        has_full = data.get('has_full', True)
+        if not has_full:
+            if not post.lost:
+                post.lost = True
+                post.failed_files = []   # a lost post is not a failed one
+                return 'lost'
+        elif post.lost and recover_lost:
+            post.lost = False
+            return 'recovered'
+        return None
 
     def _fetch_index(self, artist: Artist) -> Dict[str, Dict]:
         """The creator's whole list, de-duped by id, first-seen order kept."""
@@ -223,7 +260,7 @@ class Downloader:
     # ==================== Download ====================
 
     def download_artist(self, artist: Artist, from_date: Optional[str] = None,
-                        until_date: Optional[str] = None) -> DownloadResult:
+                        until_date: Optional[str] = None, lost: bool = False) -> DownloadResult:
         try:
             if self.is_cancelled(artist.id):
                 return DownloadResult(artist.id, success=True)
@@ -233,9 +270,14 @@ class Downloader:
                     status='completed' if artist.completed else 'ignored')
                 return DownloadResult(artist.id, success=True)
 
-            self.update_posts(artist)
+            # `lost` refreshes with recovery, so any post the server has restored
+            # rejoins the undone set here rather than needing a separate sync.
+            self.update_posts(artist, recover_lost=lost)
 
-            if from_date or until_date:
+            if lost:
+                # Force a retry of everything still undownloaded, lost included.
+                posts = [p for p in self.cache.load_posts(artist.id) if not p.done]
+            elif from_date or until_date:
                 posts = [
                     p for p in self.cache.load_posts(artist.id)
                     if (not from_date or p.published > from_date)
@@ -323,10 +365,11 @@ class Downloader:
             (save_dir / "content.txt").write_text(post.content, encoding='utf-8', errors='ignore')
 
         if not files:
-            if unusable:
+            # A lost post forced through `download-lost` stays lost on failure,
+            # rather than turning into an ordinary failed post.
+            if unusable and not post.lost:
                 self.cache.update_post(artist.id, post.id, done=False, failed_files=unusable)
-                return False
-            return True
+            return not unusable
 
         # Two files resolving to one name would race on the same target path.
         names = unique_names(Formatter.file_names(
@@ -357,7 +400,9 @@ class Downloader:
                     failed_files.append(name)
 
         if failed_files:
-            self.cache.update_post(artist.id, post.id, done=False, failed_files=failed_files)
+            # See above: a forced lost post that still 404s remains lost.
+            if not post.lost:
+                self.cache.update_post(artist.id, post.id, done=False, failed_files=failed_files)
             return False
         return True
 
@@ -387,10 +432,12 @@ class Downloader:
                 pass
 
     def _calc_last_date(self, artist: Artist) -> Optional[str]:
-        """Advance last_date over the run of oldest->newest posts that are done.
+        """Advance last_date over the run of oldest->newest posts that are settled.
 
         A filtered-out post is intentionally skipped, so it never blocks; but it
-        must not let last_date jump over an undone post it was concealing.
+        must not let last_date jump over an undone post it was concealing. A lost
+        post counts as settled: the server has no files, so it would otherwise
+        stall the watermark forever behind content that cannot be fetched.
         """
         posts = sorted(self.cache.load_posts(artist.id, apply_filters=False),
                        key=lambda p: p.published or "")
@@ -400,7 +447,7 @@ class Downloader:
         for post in posts:
             if (post.published or "") <= start:
                 continue
-            if post.id in visible and not post.done:
+            if post.id in visible and not post.done and not post.lost:
                 break
             new_last = post.published
         return new_last if new_last != start else None

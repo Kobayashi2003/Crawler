@@ -88,6 +88,9 @@ class Cache:
             for p in posts:
                 if p.id == post_id:
                     p.done = done
+                    if done:
+                        # A downloaded post is never lost: its bytes are on disk.
+                        p.lost = False
                     if failed_files is not None:
                         p.failed_files = failed_files
                     if content is not None:
@@ -98,19 +101,28 @@ class Cache:
     # ==================== Queries ====================
 
     def get_undone(self, artist_id: str) -> List[Post]:
-        return [p for p in self.load_posts(artist_id) if not p.done or p.failed_files]
+        # Lost posts are excluded: the server has no files for them, so a retry
+        # is wasted. `download-lost` is the deliberate way to try them anyway.
+        return [p for p in self.load_posts(artist_id)
+                if (not p.done or p.failed_files) and not p.lost]
+
+    def get_lost(self, artist_id: str) -> List[Post]:
+        return [p for p in self.load_posts(artist_id) if p.lost and not p.done]
 
     def stats(self, artist_id: str) -> Dict:
         try:
             posts = self.load_posts(artist_id)
         except CorruptJSON as e:
             self.logger.cache_corrupt(artist_id=artist_id, error=str(e), level='error')
-            return {'total': 0, 'done': 0, 'pending': 0, 'failed': 0, 'corrupt': True}
+            return {'total': 0, 'done': 0, 'pending': 0, 'failed': 0, 'lost': 0,
+                    'corrupt': True}
         total = len(posts)
         done = sum(1 for p in posts if p.done)
-        failed = sum(1 for p in posts if p.failed_files)
-        return {'total': total, 'done': done, 'pending': total - done,
-                'failed': failed, 'corrupt': False}
+        lost = sum(1 for p in posts if p.lost and not p.done)
+        failed = sum(1 for p in posts if p.failed_files and not p.lost)
+        # `pending` is work that can actually make progress: lost is set aside.
+        return {'total': total, 'done': done, 'pending': total - done - lost,
+                'failed': failed, 'lost': lost, 'corrupt': False}
 
     # ==================== Maintenance ====================
 
