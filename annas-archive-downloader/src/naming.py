@@ -65,8 +65,11 @@ def disambiguate(name: str, taken, discriminator: str) -> str:
     if name not in taken:
         return name
     stem, dot, ext = name.rpartition(".")
-    if not dot:
-        stem, ext = name, ""
+    # Only split off something that actually looks like an extension. Titles
+    # carry dots of their own (「作品 vol.二」), and tearing one apart would put
+    # the tag in the middle of the name.
+    if not dot or not re.fullmatch(r'[A-Za-z0-9]{1,5}', ext):
+        stem, dot, ext = name, "", ""
 
     def build(width: int) -> str:
         tag = f" [{discriminator[:width]}]"
