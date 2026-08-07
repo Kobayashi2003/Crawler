@@ -413,6 +413,23 @@ def _escape(text: str) -> str:
 
 # ---- verification ----
 
+_SPACE = re.compile(r'\s+')
+
+
+def _comparable(text: str) -> str:
+    """Paragraph text reduced to what the two builds can be held to.
+
+    The site pretty-prints the XHTML when it assembles a bilingual volume, which
+    puts newlines and indentation *inside* elements — most visibly inside
+    `<ruby>`. Once tags are stripped that leaves 「呆\\n     あきれた」 against the
+    original's 「呆あきれた」: identical text, different whitespace. Comparing it
+    raw failed every volume carrying ruby, so whitespace is dropped on both
+    sides. Markup layout is the site's to choose; the characters are the
+    contract.
+    """
+    return _SPACE.sub("", text)
+
+
 def chapter_paragraphs(path: Path, japanese_only: bool = False) -> Dict[str, List[str]]:
     """Plain-text paragraphs per chapter, for comparing two builds."""
     result: Dict[str, List[str]] = {}
@@ -429,7 +446,7 @@ def chapter_paragraphs(path: Path, japanese_only: bool = False) -> Dict[str, Lis
                 # nothing in a library volume, whose markup carries no `lang`.
                 if japanese_only and not is_japanese_paragraph(attrs):
                     continue
-                paragraphs.append(_TAGS.sub("", inner).strip())
+                paragraphs.append(_comparable(_TAGS.sub("", inner)))
             result[name] = paragraphs
     return result
 

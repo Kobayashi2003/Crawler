@@ -23,12 +23,15 @@ from urllib.parse import urljoin
 from .search import fetch_detail
 from .session import create_session, get
 
-_print_lock = threading.Lock()
+from .progress import Board
+
+#: One live progress area for the process. Bars are rewritten in place; anything
+#: printed through `_print` is flushed above them so it survives.
+BOARD = Board()
 
 
 def _print(*args, **kwargs):
-    with _print_lock:
-        print(*args, **kwargs)
+    BOARD.write(" ".join(str(a) for a in args))
 
 
 def human_size(num: float) -> str:
@@ -102,14 +105,21 @@ def _resolve_browser(config, record, driver_holder) -> Optional[str]:
     base = config.mirror.rstrip("/")
     _print(f"[browser] {record.md5}: waiting on the slow-download page (verification + "
            "countdown, up to a few minutes) — finish any challenge in the window if one appears")
+    deadline = time.time() + RECORD_BUDGET
     for server in range(0, 6):
+        if time.time() >= deadline:
+            _print(f"[browser] {record.md5}: gave up after {RECORD_BUDGET}s")
+            return None
         url = f"{base}/slow_download/{record.md5}/0/{server}"
         try:
             driver.get(url)
         except Exception as exc:
-            _print(f"[browser] {record.md5}: {exc}")
-            return None
-        link = _wait_for_download_link(driver, config, base)
+            # A timeout here is one dead server, not a dead run — try the next.
+            _print(f"[browser] {record.md5}: server #{server + 1}: "
+                   f"{type(exc).__name__}")
+            continue
+        link = _wait_for_download_link(driver, config, base,
+                                       limit=max(10, int(deadline - time.time())))
         if link:
             return link
         _print(f"[browser] {record.md5}: server #{server + 1} gave nothing, trying the next one")
@@ -176,6 +186,11 @@ class DriverHolder:
                 self._driver = None
 
 
+#: Longest any single browser page load may take.
+PAGE_TIMEOUT = 90
+#: Longest the browser backend may spend on one record, across all its servers.
+RECORD_BUDGET = 420
+
 _LOCALHOST_BYPASS = "localhost,127.0.0.1,::1"
 
 
@@ -192,13 +207,24 @@ def _create_driver(config):
         if _LOCALHOST_BYPASS not in existing:
             os.environ[var] = f"{existing},{_LOCALHOST_BYPASS}".lstrip(",")
 
+    def arm(driver):
+        """Nothing here may block forever.
+
+        Selenium waits on the browser with no deadline by default, so a driver
+        whose browser never came up leaves the whole run parked — a batch of this
+        stalled for hours on one dead chromedriver with no output at all.
+        """
+        driver.set_page_load_timeout(PAGE_TIMEOUT)
+        driver.set_script_timeout(PAGE_TIMEOUT)
+        return driver
+
     def chromium(options, driver_cls):
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
         if config.headless:
             options.add_argument("--headless=new")
-        driver = driver_cls(options=options)
+        driver = arm(driver_cls(options=options))
         driver.execute_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         return driver
@@ -207,7 +233,7 @@ def _create_driver(config):
         options = FirefoxOptions()
         if config.headless:
             options.add_argument("--headless")
-        return webdriver.Firefox(options=options)
+        return arm(webdriver.Firefox(options=options))
 
     setups = {
         "chrome": lambda: chromium(ChromeOptions(), webdriver.Chrome),
@@ -256,8 +282,8 @@ def save(session, config, url: str, path: Path, expected: int = 0,
         response.raise_for_status()
         total = int(response.headers.get("Content-Length") or expected or 0)
         written = 0
-        last = 0.0
         digest = hashlib.md5()
+        BOARD.start(path, path.name, total)
         with open(temp, "wb") as handle:
             for chunk in response.iter_content(chunk_size=65536):
                 if not chunk:
@@ -265,11 +291,7 @@ def save(session, config, url: str, path: Path, expected: int = 0,
                 handle.write(chunk)
                 digest.update(chunk)
                 written += len(chunk)
-                now = time.time()
-                if total and now - last > 1.0:
-                    last = now
-                    _print(f"  {path.name}: {written * 100 // total}% "
-                           f"({human_size(written)}/{human_size(total)})")
+                BOARD.update(path, written, total)
         if total and written < total * 0.98:
             raise IOError(f"truncated: {written} of {total} bytes")
         # Anna's Archive keys every record by the file's own md5, so this catches
@@ -277,10 +299,10 @@ def save(session, config, url: str, path: Path, expected: int = 0,
         if expect_md5 and digest.hexdigest() != expect_md5.lower():
             raise IOError(f"wrong file: md5 {digest.hexdigest()} != {expect_md5}")
         temp.replace(path)
-        _print(f"  saved   {path.name} ({human_size(written)})")
+        BOARD.finish(path, f"  saved   {path.name} ({human_size(written)})")
         return True
     except Exception as exc:
-        _print(f"  FAILED  {path.name}: {exc}")
+        BOARD.finish(path, f"  FAILED  {path.name}: {exc}")
         if temp.exists():
             temp.unlink()
         return False

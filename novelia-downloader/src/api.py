@@ -30,7 +30,11 @@ from typing import List, Optional, Tuple
 from urllib.parse import quote, urlencode
 
 from .models import WENKU, Novel, Volume
+from .progress import Board
 from .session import SessionPool, get
+
+#: One live progress area for the process.
+BOARD = Board()
 
 
 class AuthRequired(Exception):
@@ -197,7 +201,7 @@ def wenku_original_url(config, novel: Novel, volume: Volume) -> str:
     return f"{base}/files-wenku/{novel.novel_id}/{quote(volume.volume_id)}"
 
 
-def download_url(session, config, url: str, destination) -> bool:
+def download_url(session, config, url: str, destination, announce: bool = True) -> bool:
     response = get(session, url, config, stream=True, allow_redirects=True)
     if response is None:
         return False
@@ -206,19 +210,25 @@ def download_url(session, config, url: str, destination) -> bool:
         return False
     temp = destination.with_suffix(destination.suffix + ".part")
     destination.parent.mkdir(parents=True, exist_ok=True)
+    total = int(response.headers.get("Content-Length") or 0)
     try:
         written = 0
+        BOARD.start(destination, destination.name, total)
         with open(temp, "wb") as handle:
             for chunk in response.iter_content(chunk_size=65536):
                 if chunk:
                     handle.write(chunk)
                     written += len(chunk)
+                    BOARD.update(destination, written, total)
         if written == 0:
             raise IOError("empty response")
         temp.replace(destination)
+        BOARD.finish(destination,
+                     f"  got     {destination.name} ({written / 1024:.0f} KB)"
+                     if announce else "")
         return True
     except Exception as exc:
-        print(f"  FAILED  {destination.name}: {exc}")
+        BOARD.finish(destination, f"  FAILED  {destination.name}: {exc}")
         if temp.exists():
             temp.unlink()
         return False

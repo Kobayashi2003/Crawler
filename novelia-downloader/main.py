@@ -17,7 +17,6 @@ library volume.
 """
 
 import argparse
-import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -31,11 +30,10 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-from src.api import (AuthRequired, download_file, download_url, enrich_wenku,
-                     fetch_metadata, fetch_wenku_metadata, search, search_wenku,
-                     wenku_file_url, wenku_original_url)
+from src.api import (AuthRequired, enrich_wenku, fetch_metadata, fetch_wenku_metadata,
+                     search, search_wenku)
+from src.download import guarded, parse_volume_spec, process
 from src.config import ALL_PROVIDERS, ALL_TRANSLATIONS, DEFAULT_SITE, Config
-from src.convert import convert_epub, verify_against_jp
 from src.models import BILINGUAL, MODES, WEB, WENKU
 from src.naming import build_filename, disambiguate, sanitize, volume_filename
 from src.selector import choose
@@ -92,28 +90,6 @@ def format_row(novel, width: int = 42) -> str:
     if zh and len(zh) > 20:
         zh = zh[:19] + "…"
     return f"[{novel.label}] {title:<{width}}  {novel.summary():<30}  {zh}"
-
-
-def parse_volume_spec(spec: str, count: int) -> List[int]:
-    """`1,3,5-8` -> zero-based indexes, clamped to what exists."""
-    picked = set()
-    for part in spec.replace(" ", ",").split(","):
-        if not part:
-            continue
-        bounds = part.split("-")
-        if len(bounds) > 2:
-            print(f"[volumes] ignoring {part!r}: expected N or N-M")
-            continue
-        try:
-            start = int(bounds[0])
-            end = int(bounds[1]) if len(bounds) == 2 else start
-        except (ValueError, IndexError):
-            print(f"[volumes] ignoring {part!r}")
-            continue
-        for number in range(min(start, end), max(start, end) + 1):
-            if 1 <= number <= count:
-                picked.add(number - 1)
-    return sorted(picked)
 
 
 def assign_output_names(novels, config) -> None:
@@ -211,164 +187,6 @@ def collect(config: Config, query: str, ids, assume_yes: bool):
     return session, [novels[i] for i in chosen]
 
 
-def process_wenku(session, config: Config, novel, destination: Path) -> bool:
-    """Download a published work volume by volume.
-
-    A library volume has no `mode=jp` build — the site answers 400 — so the
-    bilingual file is the only route to the Japanese text, and the uploaded
-    original serves as both the verification reference and the source of the
-    publisher's stylesheets (which the bilingual build ships emptied).
-    """
-    if not novel.volumes:
-        # Search results carry no volume list; only the detail endpoint has it.
-        detail = fetch_wenku_metadata(session, config, novel.novel_id)
-        if detail is not None:
-            # The detail object is freshly built, so the run-unique output name
-            # assigned earlier has to be carried across or the folder falls back
-            # to the bare title and two same-titled works collide again.
-            detail.output_name = novel.output_name
-            novel = detail
-    volumes = novel.volumes
-    if not volumes:
-        print(f"  FAILED  {novel.display_title()}: no Japanese volumes listed")
-        return False
-    if config.volumes:
-        picked = parse_volume_spec(config.volumes, len(volumes))
-        if not picked:
-            print(f"  FAILED  {novel.display_title()}: --volumes matched nothing")
-            return False
-        volumes = [volumes[i] for i in picked]
-
-    if config.file_type != "epub":
-        print(f"  note    the library endpoint only builds epub; "
-              f"--file_type {config.file_type} is ignored here")
-
-    print(f"  {novel.display_title()}: {len(volumes)} volume(s)")
-    folder = destination / (novel.output_name or sanitize(novel.display_title()))
-    # A work's volumes are independent files, and for a library work that is the
-    # whole batch — running them one at a time would leave --workers doing
-    # nothing in the common case of downloading a single series.
-    sessions = SessionPool(config)
-    ok = 0
-    with ThreadPoolExecutor(max_workers=max(1, config.workers)) as pool:
-        for result in pool.map(
-                lambda v: _guarded(_process_volume, sessions.get(), config, novel, v, folder),
-                volumes):
-            ok += bool(result)
-    return ok == len(volumes)
-
-
-def _process_volume(session, config, novel, volume, folder: Path) -> bool:
-    raw_path = folder / volume_filename(volume, config.mode)
-    if not download_url(session, config,
-                        wenku_file_url(config, novel, volume, config.mode), raw_path):
-        return False
-    print(f"  got     {raw_path.name} ({raw_path.stat().st_size / 1024:.0f} KB)")
-
-    if not (config.convert and config.mode in BILINGUAL):
-        return True
-
-    # One fetch of the original covers both stylesheet restoration and checking.
-    reference = folder / f".original-{sanitize(volume.volume_id)}"
-    has_reference = download_url(session, config,
-                                 wenku_original_url(config, novel, volume), reference)
-    if not has_reference:
-        print("          note: original unavailable; using the generated stylesheet")
-
-    out_path = folder / volume_filename(volume, config.mode, converted=True)
-    report = convert_epub(raw_path, out_path, vertical=config.vertical,
-                          title_jp="", introduction_jp="", authors=novel.authors,
-                          toc=[],
-                          restore_css_from=reference if has_reference else None)
-    print(f"  convert {out_path.name}")
-    print(f"          {report.describe()}")
-    for warning in report.warnings:
-        print(f"          warning: {warning}")
-
-    passed = True
-    if config.verify and has_reference:
-        passed, detail = verify_against_jp(
-            out_path, reference, "the publisher's uploaded original")
-        print(f"          verify: {'OK — ' if passed else 'MISMATCH — '}{detail}")
-    elif config.verify:
-        print("          verify: skipped (no reference available)")
-
-    # On a mismatch the bilingual source is the only way to work out what went
-    # wrong, so it survives — and the suspect output is renamed rather than left
-    # looking like a finished book.
-    if passed and not config.keep_original:
-        raw_path.unlink(missing_ok=True)
-    elif not passed:
-        suspect = out_path.with_name(out_path.stem + " [UNVERIFIED]" + out_path.suffix)
-        out_path.replace(suspect)
-        print(f"          kept the source and renamed the output to {suspect.name}")
-    reference.unlink(missing_ok=True)
-    return passed
-
-
-def process(session, config: Config, novel, destination: Path) -> bool:
-    """Download one work and, when asked, convert it to Japanese-only."""
-    if novel.kind == WENKU:
-        return process_wenku(session, config, novel, destination)
-
-    raw_name = novel.output_name or build_filename(novel, config.mode, config.file_type)
-    raw_path = destination / raw_name
-
-    if not download_file(session, config, novel, config.mode, raw_path):
-        return False
-    size = raw_path.stat().st_size
-    print(f"  got     {raw_name} ({size / 1024:.0f} KB)")
-
-    convertible = config.convert and config.mode in BILINGUAL and config.file_type == "epub"
-    if not convertible:
-        if config.convert and config.mode not in BILINGUAL:
-            print(f"  note    mode={config.mode} is already single-language; nothing to convert")
-        elif config.convert and config.file_type != "epub":
-            print(f"  note    conversion only handles epub; kept {config.file_type} as-is")
-        return True
-
-    # The metadata table of contents supplies the Japanese chapter labels. A
-    # search result carries none, so fetch it unless we already have it.
-    detail = novel if novel.toc else fetch_metadata(
-        session, config, novel.provider_id, novel.novel_id)
-    toc, introduction, authors = [], novel.introduction_jp, novel.authors
-    if detail is not None:
-        toc = detail.toc
-        introduction = detail.introduction_jp or introduction
-        authors = detail.authors or authors
-
-    # Derive the converted name from the unique raw name, so two same-titled
-    # works cannot collide here either.
-    out_path = destination / re.sub(r'\[[^\]]*\](?=\.[^.]+$)', "[ja]", raw_name)
-    if out_path == raw_path:
-        out_path = raw_path.with_name(raw_path.stem + " [ja]" + raw_path.suffix)
-    report = convert_epub(raw_path, out_path, vertical=config.vertical,
-                          title_jp=novel.title_jp, introduction_jp=introduction,
-                          authors=authors, toc=toc)
-    print(f"  convert {out_path.name}")
-    print(f"          {report.describe()}")
-    for warning in report.warnings:
-        print(f"          warning: {warning}")
-
-    passed = True
-    if config.verify:
-        reference = destination / f".verify-{novel.provider_id}-{novel.novel_id}.epub"
-        if download_file(session, config, novel, "jp", reference):
-            passed, detail_text = verify_against_jp(out_path, reference)
-            print(f"          verify: {'OK — ' if passed else 'MISMATCH — '}{detail_text}")
-            reference.unlink(missing_ok=True)
-        else:
-            print("          verify: skipped (reference download failed)")
-
-    if passed and not config.keep_original:
-        raw_path.unlink(missing_ok=True)
-    elif not passed:
-        suspect = out_path.with_name(out_path.stem + " [UNVERIFIED]" + out_path.suffix)
-        out_path.replace(suspect)
-        print(f"          kept the source and renamed the output to {suspect.name}")
-    return passed
-
-
 def run(config: Config, query: str, ids, assume_yes: bool, dry_run: bool) -> int:
     session, novels = collect(config, query, ids, assume_yes)
     if novels is None:
@@ -404,22 +222,11 @@ def run(config: Config, query: str, ids, assume_yes: bool, dry_run: bool) -> int
     ok = 0
     with ThreadPoolExecutor(max_workers=max(1, config.workers)) as pool:
         for result in pool.map(
-                lambda n: _guarded(process, sessions.get(), config, n, destination),
+                lambda n: guarded(process, sessions.get(), config, n, destination),
                 novels):
             ok += bool(result)
     print(f"\nDone: {ok}/{len(novels)} work(s) into {destination}")
     return 0 if ok == len(novels) else 1
-
-
-def _guarded(fn, *args):
-    """One failing work must not take the rest of the batch with it."""
-    try:
-        return fn(*args)
-    except KeyboardInterrupt:
-        raise
-    except Exception as exc:
-        print(f"  FAILED  {type(exc).__name__}: {exc}")
-        return False
 
 
 def main(argv=None) -> int:

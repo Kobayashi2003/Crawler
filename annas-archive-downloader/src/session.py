@@ -70,11 +70,28 @@ def get(session: requests.Session, url: str, config, **kwargs) -> Optional[reque
             response = session.get(url, timeout=config.timeout, **kwargs)
             if response.status_code == 429 or 500 <= response.status_code < 600:
                 last_error = f"HTTP {response.status_code}"
+                throttled = response.status_code == 429
+                # Being rate-limited is not a transient blip: coming back in two
+                # seconds just spends another request on the same refusal, and
+                # the caller then records a real result as "not found".
+                delay = _retry_after(response) if throttled else 0
+                if throttled and not delay:
+                    delay = min(15 * attempt, 60)
             else:
                 return response
         except Exception as exc:
             last_error = exc
+            delay = 0
         if attempt < config.retry:
-            time.sleep(min(2 ** attempt, 10))
+            time.sleep(delay or min(2 ** attempt, 10))
     print(f"[http] giving up on {url}: {last_error}")
     return None
+
+
+def _retry_after(response) -> int:
+    """Honour `Retry-After` when the server sends one."""
+    raw = response.headers.get("Retry-After", "")
+    try:
+        return max(0, min(int(raw), 120))
+    except (TypeError, ValueError):
+        return 0

@@ -13,13 +13,19 @@ from typing import Dict, List, Optional
 
 from .models import Record, VolumeGroup
 
+# Punctuation that can sit immediately before a volume number. Japanese titles
+# very often end in `!` or `?` and hang the number straight off it
+# (「うちの居候が世界を掌握している!11」), and wave dashes close a bracketed
+# subtitle the same way (「田中~…~1」).
+_BEFORE = r'\s.,:_\-–—）)\]】〉》>»」』!！?？~〜。、'
+
 # Patterns with an unambiguous "this is a volume" marker.
 _EXPLICIT = [
     r'\bvol(?:ume|s)?\.?\s*[#＃]?\s*(\d{1,4}(?:\.\d)?(?:\s*[-–]\s*\d{1,4})?)\b',
     r'第\s*(\d{1,4})\s*[巻卷冊册]',
     r'\bbook\s+(\d{1,3})\b',
     r'\btome\s+(\d{1,3})\b',
-    r'\b[vV]\.?\s?(\d{2,3})\b',
+    r'\bl?v\.?\s?(\d{1,3})\b',          # "Lv.2" is the volume marker in some series
     r'[#＃]\s*(\d{1,4})\b',
     r'(\d{1,4})\s*[巻卷]',
 ]
@@ -30,11 +36,51 @@ _BARE = [
     # A number at the end of the name, before the subtitle separator, or before a
     # trailing qualifier: "… 12: Alicization Rising", "… 7 (light novel)".
     # "=" covers the library-catalogue form "葬送のフリーレン. 11 = Frieren".
-    r'(?:^|[\s.,:_\-–])(\d{1,3}(?:\.\d)?)\s*(?=[:：,，=＝]|[（(\[【]|$)',
+    # A closing bracket counts as a separator too, for the common shape where the
+    # series carries a bracketed subtitle: 「落第騎士の英雄譚<キャバルリィ>2」.
+    # A trailing "." introduces a subtitle in 「魔界帰りの劣等能力者3.二人の英雄」 —
+    # but only when no digit follows, so that "3.5" stays a half volume.
+    rf'(?:^|[{_BEFORE}])(\d{{1,3}}(?:\.\d)?)\s*(?=[:：,，=＝]|[.。](?!\d)|[（(\[【]|$)',
     # Japanese/Chinese titles append the number straight to the series name with
     # no separator: 「ソードアート・オンライン16 アリシゼーション…」.
-    r'[぀-ヿ㐀-鿿가-힣](\d{1,3}(?:\.\d)?)(?=[\s　（(\[【]|$)',
+    r'[぀-ヿ㐀-鿿가-힣](\d{1,3}(?:\.\d)?)(?=[\s　（(\[【.。]|$)',
+    # After a sentence-ending mark the number is the volume even when a subtitle
+    # follows it: 「神は遊戯に飢えている。1 神々に挑む少年の…」.
+    r'[。!！?？](\d{1,3}(?:\.\d)?)(?=[\s　]|$)',
 ]
+
+# Roman numerals are used for volume numbers by a few long-running series
+# (「灼眼のシャナXXI」, 「現実主義勇者の王国再建記XIX」). Only counted directly after
+# a CJK character, which keeps English words such as "MIX" out of it.
+_ROMAN = re.compile(r'[぀-ヿ㐀-鿿가-힣]([IVXLC]{1,8})\s*$')
+_ROMAN_VALUES = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100}
+
+
+def _roman_to_int(text: str):
+    """Value of a roman numeral, or None when it is not one."""
+    total = 0
+    previous = 0
+    for char in reversed(text):
+        value = _ROMAN_VALUES.get(char)
+        if value is None:
+            return None
+        total += -value if value < previous else value
+        previous = max(previous, value)
+    # Re-rendering it is the cheap way to reject "IIII" and other non-numerals.
+    if total <= 0 or total > 60 or _int_to_roman(total) != text:
+        return None
+    return total
+
+
+def _int_to_roman(number: int) -> str:
+    pairs = ((50, "L"), (40, "XL"), (10, "X"), (9, "IX"),
+             (5, "V"), (4, "IV"), (1, "I"))
+    out = []
+    for value, glyph in pairs:
+        while number >= value:
+            out.append(glyph)
+            number -= value
+    return "".join(out)
 
 # A run of CJK is one token, not one token per character. Per-character tokens
 # reduce the relevance filter to a character-set test, where 「ドラゴン」 happily
@@ -69,6 +115,14 @@ def detect_volume(record: Record, source: str = "auto", override: str = "") -> O
                 match = re.search(pattern, text, re.I)
                 if match:
                     return _normalize(match.group(1))
+    # Last, because a roman numeral is the least common form and the easiest to
+    # read into a title that merely ends in the right letters.
+    for text in _texts(record, source, publisher_first=True):
+        match = _ROMAN.search(text)
+        if match:
+            value = _roman_to_int(match.group(1).upper())
+            if value is not None:
+                return str(value)
     return None
 
 
