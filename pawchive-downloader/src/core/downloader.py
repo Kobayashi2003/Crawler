@@ -260,7 +260,8 @@ class Downloader:
     # ==================== Download ====================
 
     def download_artist(self, artist: Artist, from_date: Optional[str] = None,
-                        until_date: Optional[str] = None, lost: bool = False) -> DownloadResult:
+                        until_date: Optional[str] = None, lost: bool = False,
+                        pending: bool = False, failed: bool = False) -> DownloadResult:
         try:
             if self.is_cancelled(artist.id):
                 return DownloadResult(artist.id, success=True)
@@ -285,6 +286,10 @@ class Downloader:
                 ]
             else:
                 posts = self.cache.get_undone(artist.id)
+                # One flag alone halves the undone set; neither or both is all of
+                # it, since a post either carries failed files or does not.
+                if pending != failed:
+                    posts = [p for p in posts if bool(p.failed_files) == failed]
 
             if not posts:
                 self.logger.downloader_nothing(artist=artist.display_name())

@@ -102,7 +102,7 @@ class Cache:
 
     def get_undone(self, artist_id: str) -> List[Post]:
         # Lost posts are excluded: the server has no files for them, so a retry
-        # is wasted. `download-lost` is the deliberate way to try them anyway.
+        # is wasted. `download:lost` is the deliberate way to try them anyway.
         return [p for p in self.load_posts(artist_id)
                 if (not p.done or p.failed_files) and not p.lost]
 

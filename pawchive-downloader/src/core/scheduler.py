@@ -132,34 +132,31 @@ class Scheduler:
 
     # ==================== Queueing ====================
 
-    def queue_manual(self, artist_id: str, from_date: str = None, until_date: str = None) -> bool:
-        return self._add(DownloadTask(artist_id, from_date, until_date,
+    # Which posts a download covers is carried as flags on the task, so one pair
+    # of methods serves the plain queue and every subset (lost/pending/failed).
+
+    def queue_manual(self, artist_id: str, from_date: str = None, until_date: str = None,
+                     lost: bool = False, pending: bool = False, failed: bool = False) -> bool:
+        return self._add(DownloadTask(artist_id, from_date, until_date, lost=lost,
+                                      pending=pending, failed=failed,
                                       task_type=TaskType.MANUAL))
 
-    def queue_batch(self, artist_ids: List[str]) -> int:
-        return sum(self._add(DownloadTask(aid, task_type=TaskType.MANUAL)) for aid in artist_ids)
+    def queue_batch(self, artist_ids: List[str], lost: bool = False,
+                    pending: bool = False, failed: bool = False) -> int:
+        return sum(self.queue_manual(aid, lost=lost, pending=pending, failed=failed)
+                   for aid in artist_ids)
 
-    def queue_sync(self, artist_id: str, deep: bool = False) -> bool:
+    def queue_sync(self, artist_id: str, deep: bool = False, lost: bool = False) -> bool:
         """Queue a post-list refresh. A sync and a download write the same
-        cache, so the one-task-per-artist rule has to cover both."""
-        return self._add(DownloadTask(artist_id, deep=deep, task_type=TaskType.SYNC))
+        cache, so the one-task-per-artist rule has to cover both.
 
-    def queue_sync_batch(self, artist_ids: List[str], deep: bool = False) -> int:
-        return sum(self.queue_sync(aid, deep) for aid in artist_ids)
+        `lost` reclaims lost posts the server has restored."""
+        return self._add(DownloadTask(artist_id, deep=deep, recover_lost=lost,
+                                      task_type=TaskType.SYNC))
 
-    def queue_sync_lost(self, artist_id: str) -> bool:
-        """Queue a refresh that reclaims lost posts the server has restored."""
-        return self._add(DownloadTask(artist_id, recover_lost=True, task_type=TaskType.SYNC))
-
-    def queue_sync_lost_batch(self, artist_ids: List[str]) -> int:
-        return sum(self.queue_sync_lost(aid) for aid in artist_ids)
-
-    def queue_download_lost(self, artist_id: str) -> bool:
-        """Queue a forced retry of an artist's lost posts."""
-        return self._add(DownloadTask(artist_id, lost=True, task_type=TaskType.MANUAL))
-
-    def queue_download_lost_batch(self, artist_ids: List[str]) -> int:
-        return sum(self.queue_download_lost(aid) for aid in artist_ids)
+    def queue_sync_batch(self, artist_ids: List[str], deep: bool = False,
+                         lost: bool = False) -> int:
+        return sum(self.queue_sync(aid, deep, lost) for aid in artist_ids)
 
     def _add(self, task: DownloadTask) -> bool:
         with self.lock:
@@ -225,7 +222,8 @@ class Scheduler:
                 task.note = self._sync_note(counts, task)
             else:
                 self.downloader.download_artist(
-                    artist, task.from_date, task.until_date, lost=task.lost)
+                    artist, task.from_date, task.until_date, lost=task.lost,
+                    pending=task.pending, failed=task.failed)
             task.status = TaskStatus.COMPLETED
         except Exception as e:
             task.status = TaskStatus.FAILED

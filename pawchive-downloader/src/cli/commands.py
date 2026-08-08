@@ -63,6 +63,13 @@ _LISTING = (Param('sort_by', 'str', 'name', 'order',
             Param('service', 'str', '', 'only this service'))
 _DEEP = Param('deep', 'bool', False, 'also re-flag edits')
 
+# Which posts a download covers. Each one pairs with the batch command of the
+# same name, so one creator and every creator are asked for the same way.
+_LOST = Param('lost', 'bool', False, 'force-retry lost posts')
+_PENDING = Param('pending', 'bool', False, 'only posts not tried yet')
+_FAILED = Param('failed', 'bool', False, 'only posts with failed files')
+_RECHECK = Param('lost', 'bool', False, 'also re-check lost posts')
+
 
 # ============================================================================
 # Helpers
@@ -175,6 +182,11 @@ def _has_work(ctx: CLIContext, a: Artist) -> bool:
     """True if the artist has posts left to fetch/download (or nothing cached)."""
     s = ctx.cache.stats(a.id)
     return s['total'] == 0 or s['pending'] > 0 or s['failed'] > 0
+
+
+def _fresh_count(ctx: CLIContext, artist_id: str) -> int:
+    """Undone posts that have never failed -- what `:pending` targets."""
+    return sum(1 for p in ctx.cache.get_undone(artist_id) if not p.failed_files)
 
 
 # ============================================================================
@@ -464,14 +476,27 @@ def cmd_list_lost(ctx, sort_by, service, details):
 # Download
 # ============================================================================
 
-@_cmd('download', 'DOWNLOAD', "Download one creator's pending posts", params=(_ARTIST,))
-def cmd_download(ctx: CLIContext, artist):
+def _subset_label(ctx: CLIContext, artist_id: str, lost, pending, failed) -> str:
+    """How many posts the flags select, for the queued message."""
+    s = ctx.cache.stats(artist_id)
+    if lost:
+        return f"{s['lost']} lost"
+    if pending and not failed:
+        return f"{_fresh_count(ctx, artist_id)} pending"
+    if failed and not pending:
+        return f"{s['failed']} failed"
+    return f"{len(ctx.cache.get_undone(artist_id))} pending"
+
+
+@_cmd('download', 'DOWNLOAD', "Download one creator's pending posts",
+      params=(_ARTIST, _LOST, _PENDING, _FAILED))
+def cmd_download(ctx: CLIContext, artist, lost, pending, failed):
     artist = select_artist(ctx, artist)
     if not artist:
         return
-    if ctx.scheduler.queue_manual(artist.id):
-        pending = len(ctx.cache.get_undone(artist.id))
-        print(f"Queued {artist.display_name()} ({pending} pending). Use 'tasks' to monitor.")
+    if ctx.scheduler.queue_manual(artist.id, lost=lost, pending=pending, failed=failed):
+        label = _subset_label(ctx, artist.id, lost, pending, failed)
+        print(f"Queued {artist.display_name()} ({label}). Use 'tasks' to monitor.")
     else:
         print("Already queued or running.")
 
@@ -483,50 +508,29 @@ def cmd_download_all(ctx: CLIContext):
     print(f"Queued {added}/{len(ids)} active creators.")
 
 
+# Each batch command is its `download` flag applied to every active creator the
+# flag would find work for; queueing the rest would only start empty runs.
+def _queue_subset(ctx: CLIContext, has_work, label: str, **flags):
+    ids = [a.id for a in get_artists(ctx, only_active=True) if has_work(a.id)]
+    print(f"Queued {ctx.scheduler.queue_batch(ids, **flags)} creators with {label}.")
+
+
 @_cmd('download-pending', 'DOWNLOAD', 'Queue only creators that have pending posts')
 def cmd_download_pending(ctx: CLIContext):
-    ids = [a.id for a in get_artists(ctx, only_active=True) if ctx.cache.get_undone(a.id)]
-    added = ctx.scheduler.queue_batch(ids)
-    print(f"Queued {added} creators with pending posts.")
+    _queue_subset(ctx, lambda aid: _fresh_count(ctx, aid) > 0,
+                  "pending posts", pending=True)
 
 
 @_cmd('download-failed', 'DOWNLOAD', 'Queue only creators that have failed files')
 def cmd_download_failed(ctx: CLIContext):
-    ids = [a.id for a in get_artists(ctx, only_active=True)
-           if ctx.cache.stats(a.id)['failed'] > 0]
-    added = ctx.scheduler.queue_batch(ids)
-    print(f"Queued {added} creators with failed files.")
+    _queue_subset(ctx, lambda aid: ctx.cache.stats(aid)['failed'] > 0,
+                  "failed files", failed=True)
 
 
-# sync-lost and download-lost queue the same lost set through different handlers,
-# so their command bodies share these two helpers.
-def _queue_lost(ctx: CLIContext, query: str, queue_fn, verb: str):
-    artist = select_artist(ctx, query)
-    if not artist:
-        return
-    if queue_fn(artist.id):
-        lost = ctx.cache.stats(artist.id)['lost']
-        print(f"Queued lost {verb} for {artist.display_name()} ({lost} lost). "
-              "Use 'tasks' to monitor.")
-    else:
-        print("Already queued or running.")
-
-
-def _queue_lost_all(ctx: CLIContext, batch_fn):
-    ids = [a.id for a in get_artists(ctx, only_active=True)
-           if ctx.cache.stats(a.id)['lost'] > 0]
-    print(f"Queued {batch_fn(ids)} creators with lost posts.")
-
-
-@_cmd('download-lost', 'DOWNLOAD', "Force-retry a creator's lost posts",
-      params=(_ARTIST,))
-def cmd_download_lost(ctx: CLIContext, artist):
-    _queue_lost(ctx, artist, ctx.scheduler.queue_download_lost, "retry")
-
-
-@_cmd('download-lost-all', 'DOWNLOAD', 'Force-retry lost posts for every creator with any')
-def cmd_download_lost_all(ctx: CLIContext):
-    _queue_lost_all(ctx, ctx.scheduler.queue_download_lost_batch)
+@_cmd('download-lost', 'DOWNLOAD', 'Force-retry lost posts for every creator with any')
+def cmd_download_lost(ctx: CLIContext):
+    _queue_subset(ctx, lambda aid: ctx.cache.stats(aid)['lost'] > 0,
+                  "lost posts", lost=True)
 
 
 def _ask_date(value: str, label: str) -> Optional[str]:
@@ -591,14 +595,15 @@ def cmd_download_between(ctx: CLIContext, artist, after, before):
 # one creator takes minutes, and blocking here froze the shell for all of it.
 
 @_cmd('sync', 'SYNC', "Queue a post-list refresh (no files)",
-      params=(_ARTIST, _DEEP))
-def cmd_sync(ctx: CLIContext, artist, deep):
+      params=(_ARTIST, _DEEP, _RECHECK))
+def cmd_sync(ctx: CLIContext, artist, deep, lost):
     artist = select_artist(ctx, artist)
     if not artist:
         return
-    if ctx.scheduler.queue_sync(artist.id, deep):
+    if ctx.scheduler.queue_sync(artist.id, deep, lost):
+        modes = ", ".join(m for m, on in (("deep", deep), ("lost", lost)) if on)
         print(f"Queued sync for {artist.display_name()}"
-              + (" (deep)" if deep else "") + ". Use 'tasks' to monitor.")
+              + (f" ({modes})" if modes else "") + ". Use 'tasks' to monitor.")
     else:
         print("Already queued or running.")
 
@@ -612,18 +617,14 @@ def cmd_sync_all(ctx: CLIContext, deep):
           + ". Use 'tasks' to monitor.")
 
 
-# A normal sync never un-marks a lost post; these re-check them and reclaim any
-# the server has since restored, returning them to the download queue.
+# A normal sync never un-marks a lost post; `:lost` re-checks them and reclaims
+# any the server has since restored, returning them to the download queue.
 
-@_cmd('sync-lost', 'SYNC', 'Re-check a creator’s lost posts for upstream restore',
-      params=(_ARTIST,))
-def cmd_sync_lost(ctx: CLIContext, artist):
-    _queue_lost(ctx, artist, ctx.scheduler.queue_sync_lost, "re-check")
-
-
-@_cmd('sync-lost-all', 'SYNC', 'Re-check lost posts for every creator with any')
-def cmd_sync_lost_all(ctx: CLIContext):
-    _queue_lost_all(ctx, ctx.scheduler.queue_sync_lost_batch)
+@_cmd('sync-lost', 'SYNC', 'Re-check lost posts for every creator with any')
+def cmd_sync_lost(ctx: CLIContext):
+    ids = [a.id for a in get_artists(ctx, only_active=True)
+           if ctx.cache.stats(a.id)['lost'] > 0]
+    print(f"Queued {ctx.scheduler.queue_sync_batch(ids, lost=True)} creators with lost posts.")
 
 
 # ============================================================================

@@ -179,7 +179,12 @@ class DownloadTask:
     from_date: Optional[str] = None
     until_date: Optional[str] = None
     deep: bool = False               # SYNC only: also re-flag edited posts
-    lost: bool = False               # download only: target lost posts, forcing a retry
+    # Download subsets. `lost` forces a retry of posts upstream has no files for;
+    # `pending`/`failed` split the undone set into never-tried and previously
+    # failed. None or both of the latter means the whole undone set.
+    lost: bool = False
+    pending: bool = False
+    failed: bool = False
     recover_lost: bool = False       # SYNC only: un-mark posts the server has restored
     task_type: str = TaskType.MANUAL
     status: str = TaskStatus.QUEUED
